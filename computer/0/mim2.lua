@@ -213,7 +213,7 @@ end
 
 ------ Graphics functions ------
 local player = {
-  x = 64, y = 67
+  x = 64, y = 66
 }
 
 --local oldTerm = term.current()
