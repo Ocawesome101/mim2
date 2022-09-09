@@ -251,15 +251,15 @@ local player = {
 }
 
 local function tryMove()
-  local newX, newY = player.x + player.motion.x, player.y + player.motion.y
-  local newBlockHead = getBlockName(newX, newY + 1)
-  local newBlockFoot = getBlockName(newX, newY)
-
   if getBlockName(player.x, player.y - 1) == "air" then
     player.motion.y = math.max(-2, player.motion.y - 1)
   else
     player.motion.y = 0
   end
+
+  local newX, newY = player.x + player.motion.x, player.y + player.motion.y
+  local newBlockHead = getBlockName(newX, newY + 1)
+  local newBlockFoot = getBlockName(newX, newY)
 
   if newBlockHead == "air" and newBlockFoot == "air" then
     player.x, player.y = newX, newY
