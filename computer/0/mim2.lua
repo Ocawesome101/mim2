@@ -19,8 +19,7 @@ print("If it is, then the following text will appear as a row of blocks:")
 for i=0x80, 0x8F do
   io.write(string.char(i))
 end
-print("\nIf it does not appear as a row of blocks, install the font or game graphics will be garbled.  Font installation instructions are in the Minecraft-in-Minecraft 2 README file.")
-
+print("\nIf it does not appear as a row of blocks, install the font or game graphics will be garbled.  Font installation instructions are in the Minecraft-in-Minecraft 2 README file.\n")
 print("If the font IS present, press Enter to continue.")
 print("Otherwise, hold Ctrl-T to stop the program.")
 
@@ -29,25 +28,25 @@ do local _ = io.read() end
 ------ Block registration ------
 
 -- physics types are tables for comparison efficiency
-local air, solid, liquid = {}, {}, {}
+local p_air, p_solid, p_liquid = {}, {}, {}
 
 local blocks = {
   [0] = {
     name = "air",         -- block name
-    tex = 0,              -- block texture (character)
-    physics = air,        -- physics type
+    tex = 0x60,           -- block texture (character)
+    physics = p_air,      -- physics type
     transparent = true,   -- lets light through?
   },
   [1] = {
     name = "bedrock",
-    tex = 0x60,
-    physics = solid,
+    tex = 0x61,
+    physics = p_solid,
     transparent = false,
   },
   [2] = {
     name = "stone",
-    tex = 0x61,
-    physics = solid,
+    tex = 0x62,
+    physics = p_solid,
     transparent = false
   }
 }
@@ -125,39 +124,85 @@ end
 
 local function getBlockStrip(y, x1, x2)
   local chunk1, chunk2 = math.floor(x1 / 256), math.floor(x2 / 256)
+  local offset1, offset2 = x1 - (chunk1 * 256), x2 - (chunk2 * 256)
 
-  
+  if chunk1 == chunk2 then
+    return map[chunk1][y]:sub(offset1, offset2)
+
+  else
+    local diff = chunk2 - chunk1
+    local begin, _end =
+      map[chunk1][y]:sub(offset1),
+      map[chunk2][y]:sub(1, offset2)
+
+    local middle = ""
+
+    if diff > 1 then
+      for i=chunk1+1, chunk2-1 do
+        middle = middle .. map[i][y]
+      end
+    end
+
+    return begin .. middle .. _end
+  end
+end
+
+local function getLightMap(_, x1, x2)
+  return ("f"):rep(x2 - x1 + 1)
 end
 
 ------ Terrain Generation ------
 local function populateChunk(id)
-  local bedrock = blocks[1]:rep(256)
-  map[id][256] = bedrock
+  local air = string.char(blocks[0].tex):rep(256)
+  local bedrock = string.char(blocks[1].tex):rep(256)
+  for i=1, 253, 1 do
+    map[id][i] = air
+  end
+  for i=254, 156 do
+    map[id][i] = bedrock
+  end
 end
 
 ------ Graphics functions ------
 local player = {
-  x = 0, y = 100
+  x = 64, y = 8
 }
 
-local oldTerm = term.current()
-local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
+--local oldTerm = term.current()
+--local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
 
 local function draw()
-  win.reposition(1, 1, oldTerm.getSize())
-  term.redirect(win)
+--  win.reposition(1, 1, oldTerm.getSize())
+  --term.redirect(win)
+
+--  win.setVisible(false)
 
   local w, h = term.getSize()
-
-  local halfW, halfH = math.ceil(w/2), math.floor(h/2)
+  local halfW, halfH = math.floor(w/2), math.ceil(h/2)
 
   for y = player.y - halfH, player.y + halfH, 1 do
-    local blocks = getBlockStrip(y, player.x - halfW, player.x + halfW)
-    local light = getLightMap(y, player.x - halfW, player.x + halfW)
+    if y > 0 and y <= 256 then
+      local block = getBlockStrip(y, player.x - halfW, player.x + halfW)
+      local light = getLightMap(y, player.x - halfW, player.x + halfW)
 
-    term.setCursorPos(1, y)
-    term.blit(blocks, light, light)
+      --print(h - (y - player.y + halfH))
+      term.setCursorPos(1, h - (y - player.y + halfH))
+      term.blit(block, light, light)
+    end
   end
 
-  term.redirect(oldTerm)
+  --win.setVisible(true)
+
+--  term.redirect(oldTerm)
 end
+
+for i=0, 15 do
+  term.setPaletteColor(2^i, i/15, i/15, i/15)
+end
+
+for i=-128, 127 do
+  map[i] = {}
+  populateChunk(i)
+end
+
+draw()
