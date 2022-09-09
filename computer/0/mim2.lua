@@ -34,25 +34,65 @@ local blocks = {
   [0] = {
     name = "air",         -- block name
     tex = 0x60,           -- block texture (character)
-    physics = p_air,      -- physics type
-    transparent = true,   -- lets light through?
+    physics = p_air,      -- physics type (default p_solid)
+    transparent = true,   -- lets light through? (default false)
   },
-  [1] = {
+  {
     name = "bedrock",
     tex = 0x61,
-    physics = p_solid,
-    transparent = false,
   },
-  [2] = {
+  {
     name = "stone",
     tex = 0x62,
-    physics = p_solid,
-    transparent = false
+  },
+  {
+    name = "cobblestone",
+    tex = 0x63,
+  },
+  {
+    name = "coal_ore",
+    tex = 0x64,
+  },
+  {
+    name = "iron_ore",
+    tex = 0x65,
+  },
+  {
+    name = "diamond_ore",
+    tex = 0x66,
+  },
+  {
+    name = "redstone_ore",
+    tex = 0x67,
+  },
+  {
+    name = "gold_ore",
+    tex = 0x68,
+  },
+  {
+    name = "nice_stone",
+    tex = 0x69,
+  },
+  {
+    name = "dirt",
+    tex = 0x6A
+  },
+  {
+    name = "grass",
+    tex = 0x6B
   }
 }
 
------- Map functions ------
+local function getBlockIDByName(name)
+  for i=0, #blocks, 1 do
+    if blocks[i].name == name then
+      return i
+    end
+  end
+end
 
+
+------ Map functions ------
 -- map[chunkID][rowID] = "256 char string"
 -- map storage format:
 -- header '\xFF' "MIMMAP" '\xFF' -- 8 bytes
@@ -153,13 +193,19 @@ end
 
 ------ Terrain Generation ------
 local function populateChunk(id)
-  local air = string.char(blocks[0].tex):rep(256)
-  local bedrock = string.char(blocks[1].tex):rep(256)
-  local stone = string.char(blocks[2].tex):rep(256)
-  for i=1, 15, 1 do
+  local air = string.char(getBlockIDByName("air")):rep(256)
+  local bedrock = string.char(getBlockIDByName("bedrock")):rep(256)
+  local stone = string.char(getBlockIDByName("stone")):rep(256)
+  local dirt = string.char(getBlockIDByName("dirt")):rep(256)
+  local grass = string.char(getBlockIDByName("grass")):rep(256)
+  for i=1, 55, 1 do
     map[id][i] = stone
   end
-  for i=16, 256, 1 do
+  for i=56, 64, 1 do
+    map[id][i] = dirt
+  end
+  map[id][64] = grass
+  for i=65, 256, 1 do
     map[id][i] = air
   end
   map[id][1] = bedrock
@@ -167,7 +213,7 @@ end
 
 ------ Graphics functions ------
 local player = {
-  x = 64, y = 8
+  x = 64, y = 67
 }
 
 --local oldTerm = term.current()
@@ -186,6 +232,11 @@ local function draw()
     if y > 0 and y <= 256 then
       local block = getBlockStrip(y, player.x - halfW, player.x + halfW)
       local light = getLightMap(y, player.x - halfW, player.x + halfW)
+
+
+      block = block:gsub(".", function(c)
+        return string.char(blocks[string.byte(c)].tex)
+      end)
 
       --print(h - (y - player.y + halfH))
       term.setCursorPos(1, h - (y - player.y + halfH))
@@ -217,7 +268,7 @@ for i=-128, 127 do
 end
 
 draw()
+do _ = io.read() end
 
-sleep(1)
 term.clear()
 term.setCursorPos(1,1)
