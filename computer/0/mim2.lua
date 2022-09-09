@@ -4,14 +4,17 @@
 
 -- Supports Recrafted!
 local term = rawget(_G, "term") or require("term")
+local keys = rawget(_G, "keys") or require("keys")
 local window = rawget(_G, "window") or require("window")
 
-local pullEvent, sleep
+local pullEvent, startTimer, cancelTimer
 if not rawget(os, "pullEvent") then
   local rc = require("rc")
-  pullEvent, sleep = rc.pullEventRaw, rc.sleep
+  pullEvent, startTimer, cancelTimer = rc.pullEventRaw, rc.startTimer,
+    rc.cancelTimer
 else
-  pullEvent, sleep = rawget(os, "pullEventRaw"), rawget(os, "sleep")
+  pullEvent, startTimer, cancelTimer = rawget(os, "pullEventRaw"),
+    rawget(os, "startTimer"), rawget(os, "cancelTimer")
 end
 
 print("Please ensure that the necessary custom font is installed.")
@@ -162,33 +165,61 @@ local function saveMap(path)
   handle:close()
 end
 
-local function getBlockStrip(y, x1, x2)
+local function getStrip(t, y, x1, x2)
   local chunk1, chunk2 = math.floor(x1 / 256), math.floor(x2 / 256)
   local offset1, offset2 = x1 - (chunk1 * 256), x2 - (chunk2 * 256)
 
   if chunk1 == chunk2 then
-    return map[chunk1][y]:sub(offset1, offset2)
+    return t[chunk1][y]:sub(offset1, offset2)
 
   else
     local diff = chunk2 - chunk1
     local begin, _end =
-      map[chunk1][y]:sub(offset1),
-      map[chunk2][y]:sub(1, offset2)
+      t[chunk1][y]:sub(offset1),
+      t[chunk2][y]:sub(1, offset2)
 
     local middle = ""
 
     if diff > 1 then
       for i=chunk1+1, chunk2-1 do
-        middle = middle .. map[i][y]
+        middle = middle .. t[i][y]
       end
     end
 
     return begin .. middle .. _end
   end
+
 end
 
-local function getLightMap(_, x1, x2)
-  return ("f"):rep(x2 - x1 + 1)
+local function getBlockStrip(y, x1, x2)
+  return getStrip(map, y, x1, x2)
+end
+
+local function getBlock(x, y)
+  return getStrip(map, y, x, x):byte()
+end
+
+local function getBlockName(x, y)
+  return blocks[getBlock(x, y)].name
+end
+
+------ Lighting ------
+-- this is similar to the map, but stores light levels and is not stored.
+local lightmap = {}
+
+local function getLightStrip(y, x1, x2)
+  return getStrip(lightmap, y, x1, x2)
+end
+
+local function updateLightMap()
+  for chunk=-128, 127, 1 do
+    if map[chunk] then
+      lightmap[chunk] = lightmap[chunk] or {}
+      for y=1, 256, 1 do
+        lightmap[chunk][y] = ("f"):rep(256)
+      end
+    end
+  end
 end
 
 ------ Terrain Generation ------
@@ -211,11 +242,31 @@ local function populateChunk(id)
   map[id][1] = bedrock
 end
 
------- Graphics functions ------
+------ Physics ------
 local player = {
-  x = 64, y = 66
+  x = 64, y = 66,
+  motion = {
+    x = 0, y = 0
+  }
 }
 
+local function tryMove()
+  local newX, newY = player.x + player.motion.x, player.y + player.motion.y
+  local newBlockHead = getBlockName(newX, newY + 1)
+  local newBlockFoot = getBlockName(newX, newY)
+
+  if getBlockName(player.x, player.y - 1) == "air" then
+    player.motion.y = math.max(-2, player.motion.y - 1)
+  else
+    player.motion.y = 0
+  end
+
+  if newBlockHead == "air" and newBlockFoot == "air" then
+    player.x, player.y = newX, newY
+  end
+end
+
+------ Graphics ------
 --local oldTerm = term.current()
 --local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
 
@@ -225,13 +276,15 @@ local function draw()
 
 --  win.setVisible(false)
 
+  updateLightMap()
+
   local w, h = term.getSize()
-  local halfW, halfH = math.floor(w/2), math.ceil(h/2)
+  local halfW, halfH = math.floor(w/2), math.floor(h/2)
 
   for y = player.y - halfH, player.y + halfH, 1 do
     if y > 0 and y <= 256 then
       local block = getBlockStrip(y, player.x - halfW, player.x + halfW)
-      local light = getLightMap(y, player.x - halfW, player.x + halfW)
+      local light = getLightStrip(y, player.x - halfW, player.x + halfW)
 
 
       block = block:gsub(".", function(c)
@@ -267,8 +320,38 @@ for i=-128, 127 do
   populateChunk(i)
 end
 
-draw()
-do _ = io.read() end
+while true do
+  draw()
+
+  local id = startTimer(0.1)
+  local evt = table.pack(pullEvent())
+
+  if evt[1] ~= "timer" then
+    cancelTimer(id)
+  end
+
+  if evt[1] == "key" then
+    if evt[2] == keys.w and not evt[3] then
+      player.motion.y = 2
+
+    elseif evt[2] == keys.s and not evt[3] then
+      player.motion.y = -1
+
+    elseif evt[2] == keys.a then
+      player.motion.x = -1
+
+    elseif evt[2] == keys.d then
+      player.motion.x = 1
+    end
+
+  elseif evt[1] == "key_up" then
+    if evt[2] == keys.a or evt[2] == keys.d then
+      player.motion.x = 0
+    end
+  end
+
+  tryMove()
+end
 
 term.clear()
 term.setCursorPos(1,1)
