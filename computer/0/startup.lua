@@ -1,4 +1,4 @@
-local native = term.native()
+local native = term.current()
 
 local _w=native.write
 local _b=native.blit
@@ -10,6 +10,7 @@ end
 function native.write(t)
   return _w((t:gsub(".", sub)))
 end
+--[[
 function native.blit(t, f, b)
   return _b(t:gsub(".", sub), f, b)
-end
+end]]
