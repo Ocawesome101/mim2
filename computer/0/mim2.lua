@@ -155,12 +155,14 @@ end
 local function populateChunk(id)
   local air = string.char(blocks[0].tex):rep(256)
   local bedrock = string.char(blocks[1].tex):rep(256)
-  for i=1, 253, 1 do
+  local stone = string.char(blocks[2].tex):rep(256)
+  for i=1, 15, 1 do
+    map[id][i] = stone
+  end
+  for i=16, 256, 1 do
     map[id][i] = air
   end
-  for i=254, 156 do
-    map[id][i] = bedrock
-  end
+  map[id][1] = bedrock
 end
 
 ------ Graphics functions ------
@@ -188,8 +190,17 @@ local function draw()
       --print(h - (y - player.y + halfH))
       term.setCursorPos(1, h - (y - player.y + halfH))
       term.blit(block, light, light)
+    else
+      term.setCursorPos(1, h - (y - player.y + halfH))
+      local col = string.format("%x", math.max(0, y + 12))
+      term.blit(string.char(blocks[0].tex):rep(w), (col):rep(w), (col):rep(w))
     end
   end
+
+  term.setCursorPos(halfW, halfH)
+  term.blit("\xFE", "F", "F")
+  term.setCursorPos(halfW, halfH - 1)
+  term.blit("\xFD", "F", "F")
 
   --win.setVisible(true)
 
@@ -206,3 +217,7 @@ for i=-128, 127 do
 end
 
 draw()
+
+sleep(1)
+term.clear()
+term.setCursorPos(1,1)
