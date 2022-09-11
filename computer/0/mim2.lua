@@ -309,6 +309,16 @@ local function tryMove()
   elseif physicsType == p_solid then
     player.motion.y = math.max(0, player.motion.y)
   end
+
+  local mx, my = player.motion.x, player.motion.y
+
+  for _=1, math.abs(mx) do
+    tryMovePartial(mx/math.abs(mx), 0)
+  end
+
+  for _=1, math.abs(my) do
+    tryMovePartial(0, my/math.abs(my))
+  end
 end
 
 ------ Graphics ------
