@@ -102,7 +102,7 @@ end
 
 ------ Player data ------
 local player = {
-  x = 64, y = 66,
+  x = 64, y = 180,
   motion = {
     x = 0, y = 0
   },
@@ -175,7 +175,8 @@ end
 
 local function saveMap(path)
   local handle = assert(io.open(path, "wb"))
-  handle:write(HEADER .. string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
+  handle:write(HEADER ..
+    string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
 
   for id=-128, 127 do
     if map[id] then
@@ -196,10 +197,11 @@ local function saveMap(path)
 end
 
 local function getStrip(t, y, x1, x2)
-  local chunk1, chunk2 = math.floor(x1 / 256), math.floor(x2 / 256)
-  local offset1, offset2 = x1 - (chunk1 * 256), x2 - (chunk2 * 256)
+  local chunk1, chunk2 = math.ceil(x1 / 256), math.ceil(x2 / 256)
+  local offset1, offset2 = x2 - (chunk1 * 256), x2 - (chunk2 * 256)
 
   if chunk1 == chunk2 then
+--    print(chunk1, chunk2, offset1, offset2)
     return t[chunk1][y]:sub(offset1, offset2)
 
   else
@@ -260,27 +262,89 @@ local function updateLightMap()
 end
 
 ------ Terrain Generation ------
+
+local heightmap = {}
+
+local function genProgress(id, from)
+  local w, h = term.getSize()
+  local progress = math.ceil(w * (id/from))
+  local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
+  local bar = string.char(getBlockIDByName("stone")+0x60):rep(progress)
+  for i=1, h do
+    term.setCursorPos(1, i)
+    term.blit(bg, ("f"):rep(w), ("f"):rep(w))
+  end
+
+  term.setCursorPos(1, math.floor(h/2))
+  term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
+  term.setCursorPos(1, h)
+  term.write(string.format("%d/%d", id, from))
+end
+
+-- heightmap, ported from https://www.codementor.io's heightmap tutorial
+local function genHeightmap()
+  local SCAN_RADIUS = 5
+  local SMOOTH_PASSES = 3
+  local BEGIN, END = 256*-128, 256*128
+
+  heightmap = {}
+
+  for i=BEGIN, END do
+    heightmap[i] = math.random(50, 150)
+  end
+
+  for _=1, SMOOTH_PASSES do
+    for i=BEGIN, END do
+      local heightSum, heightCount = 0, 0
+
+      for n=i-SCAN_RADIUS, i + SCAN_RADIUS + 1 do
+        if n > BEGIN and n <= END then
+          local neighborHeight = heightmap[n]
+          heightSum = heightSum + neighborHeight
+          heightCount = heightCount + 1
+        end
+      end
+
+      local heightAverage = heightSum / heightCount
+      heightmap[i] = math.floor(heightAverage + 0.5)
+    end
+  end
+end
+
 local function populateChunk(id)
-  local air = string.char(getBlockIDByName("air")):rep(256)
-  local bedrock = string.char(getBlockIDByName("bedrock")):rep(256)
-  local stone = string.char(getBlockIDByName("stone")):rep(256)
-  local dirt = string.char(getBlockIDByName("dirt")):rep(256)
-  local grass = string.char(getBlockIDByName("grass")):rep(256)
-  for i=1, 55, 1 do
-    map[id][i] = stone
+  genProgress(id+129, 256)
+  local air = string.char(getBlockIDByName("air"))
+  local bedrock = string.char(getBlockIDByName("bedrock"))
+  local stone = string.char(getBlockIDByName("stone"))
+  local dirt = string.char(getBlockIDByName("dirt"))
+  local grass = string.char(getBlockIDByName("grass"))
+
+  local DIRT_DEPTH = 5
+
+  local offset = id * 256
+
+  for col=1, 256 do
+    local height = heightmap[offset + col]
+
+    for i=1, height - DIRT_DEPTH do
+      map[id][i] = (map[id][i] or "") .. stone
+    end
+
+    for i=height - (DIRT_DEPTH - 1), height - 1 do
+      map[id][i] = (map[id][i] or "") .. dirt
+    end
+
+    map[id][height] = (map[id][height] or "") .. grass
+
+    for i=height+1, 256, 1 do
+      map[id][i] = (map[id][i] or "") .. air
+    end
   end
-  for i=56, 64, 1 do
-    map[id][i] = dirt
-  end
-  map[id][64] = grass
-  for i=65, 256, 1 do
-    map[id][i] = air
-  end
-  map[id][1] = bedrock
+
+  map[id][1] = bedrock:rep(256)
 end
 
 ------ Physics ------
-
 local function tryMovePartial(x, y)
   local newX, newY = player.x + x, player.y + y
 
@@ -377,6 +441,7 @@ for i=0, 15 do
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
+genHeightmap()
 for i=-128, 127 do
   map[i] = {}
   populateChunk(i)
