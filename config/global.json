@@ -68,6 +68,6 @@
     "useDFPWM": false,
     "useHardwareRenderer": false,
     "useVsync": false,
-    "useWebP": false,
+    "useWebP": true,
     "vanilla": false
 }
