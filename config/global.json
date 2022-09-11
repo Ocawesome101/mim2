@@ -37,7 +37,7 @@
     "logErrors": false,
     "maxNotesPerTick": 8,
     "maxOpenPorts": 128,
-    "maxRecordingTime": 15,
+    "maxRecordingTime": 120,
     "maximumFilesOpen": 128,
     "monitorsUseMouseEvents": false,
     "mount_mode": 1,
