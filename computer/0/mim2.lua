@@ -5,16 +5,18 @@
 -- Supports Recrafted!
 local term = rawget(_G, "term") or require("term")
 local keys = rawget(_G, "keys") or require("keys")
-local window = rawget(_G, "window") or require("window")
+--local window = rawget(_G, "window") or require("window")
 
-local pullEvent, startTimer, cancelTimer
+local TICK_TIME = 0.1
+
+local pullEvent, startTimer, epoch
 if not rawget(os, "pullEvent") then
   local rc = require("rc")
-  pullEvent, startTimer, cancelTimer = rc.pullEventRaw, rc.startTimer,
-    rc.cancelTimer
+  pullEvent, startTimer, epoch = rc.pullEventRaw, rc.startTimer,
+    rc.epoch
 else
-  pullEvent, startTimer, cancelTimer = rawget(os, "pullEventRaw"),
-    rawget(os, "startTimer"), rawget(os, "cancelTimer")
+  pullEvent, startTimer, epoch = rawget(os, "pullEventRaw"),
+    rawget(os, "startTimer"), rawget(os, "epoch")
 end
 
 print("Please ensure that the necessary custom font is installed.")
@@ -94,12 +96,30 @@ local function getBlockIDByName(name)
   end
 end
 
+for i=0, #blocks, 1 do
+  blocks[i].physics = blocks[i].physics or p_solid
+end
+
+------ Player data ------
+local player = {
+  x = 64, y = 66,
+  motion = {
+    x = 0, y = 0
+  },
+  -- Where you're looking, relative to the player
+  look = {
+    x = 2, y = 0,
+  }
+}
 
 ------ Map functions ------
 -- map[chunkID][rowID] = "256 char string"
 -- map storage format:
 -- header '\xFF' "MIMMAP" '\xFF' -- 8 bytes
 -- version (number) -- 1 byte; the version the map was saved on
+-- playerx (number) -- 2 bytes; the player's X coordinate
+-- playery (number) -- 1 byte; the player's Y coordinate
+-- seed (number) -- 1 byte; the map seed
 -- nchunk (number) -- 1 byte; the number of chunks stored in the file
 -- for each chunk:
 --    x -- 1 byte; signed chunk ID
@@ -121,11 +141,20 @@ local function loadMap(path)
     error("invalid map version; not " .. VERSION, 0)
   end
 
+  player.x = string.unpack("<i2", handle:read(2))
+  player.y = handle:read(1):byte()
+
+  -- map seed
+  local _ = handle:read(1)
+
   local nchunk = handle:read(1):byte()
 
   map = {}
   for _=1, nchunk do
-    local id = string.unpack("b", handle:read(1))
+    local rawid = handle:read(1)
+    if not rawid then break end
+
+    local id = string.unpack("b", rawid)
     map[id] = {}
 
     for i=1, 256 do
@@ -135,7 +164,8 @@ local function loadMap(path)
       repeat
         local count = handle:read(1):byte()
         local tile = handle:read(1):byte()
-        row = row .. string.char(tile):rep(count)
+        row = row .. string.char(tile):rep(count + 1)
+        length = length + count + 1
       until length >= 256
 
       map[id][i] = row
@@ -145,7 +175,7 @@ end
 
 local function saveMap(path)
   local handle = assert(io.open(path, "wb"))
-  handle:write(HEADER .. string.char(VERSION))
+  handle:write(HEADER .. string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
 
   for id=-128, 127 do
     if map[id] then
@@ -156,7 +186,7 @@ local function saveMap(path)
           local char = row:sub(1, 1)
           local tiles = row:match("%"..char.."+")
           row = row:sub(#tiles + 1)
-          handle:write(string.pack("BB", #tiles, char:byte()))
+          handle:write(string.pack("BB", #tiles - 1, char:byte()))
         end
       end
     end
@@ -199,8 +229,15 @@ local function getBlock(x, y)
   return getStrip(map, y, x, x):byte()
 end
 
-local function getBlockName(x, y)
-  return blocks[getBlock(x, y)].name
+local function getBlockInfo(x, y)
+  return blocks[getBlock(x, y)]
+end
+
+local function setBlock(x, y, id)
+  local chunk = math.floor(x / 256)
+  local diff = x - (chunk * 256)
+  local layer = map[chunk][y]
+  map[chunk][y] = layer:sub(0, diff - 2) .. string.char(getBlockIDByName(id)) .. layer:sub(diff)
 end
 
 ------ Lighting ------
@@ -243,26 +280,34 @@ local function populateChunk(id)
 end
 
 ------ Physics ------
-local player = {
-  x = 64, y = 66,
-  motion = {
-    x = 0, y = 0
-  }
-}
 
-local function tryMove()
-  if getBlockName(player.x, player.y - 1) == "air" then
-    player.motion.y = math.max(-2, player.motion.y - 1)
-  else
-    player.motion.y = 0
+local function tryMovePartial(x, y)
+  local newX, newY = player.x + x, player.y + y
+
+  local nxHead, nxFoot = getBlockInfo(newX, player.y + 1).physics,
+    getBlockInfo(newX, player.y).physics
+
+  if nxHead ~= p_solid and nxFoot ~= p_solid then
+    player.x = newX
   end
 
-  local newX, newY = player.x + player.motion.x, player.y + player.motion.y
-  local newBlockHead = getBlockName(newX, newY + 1)
-  local newBlockFoot = getBlockName(newX, newY)
+  local nyHead, nyFoot = getBlockInfo(newX, newY + 1).physics,
+    getBlockInfo(newX, newY).physics
+  if nyHead ~= p_solid and nyFoot ~= p_solid then
+    player.y = newY
+  end
 
-  if newBlockHead == "air" and newBlockFoot == "air" then
-    player.x, player.y = newX, newY
+end
+
+local function tryMove()
+  local physicsType = getBlockInfo(player.x, player.y - 1).physics
+
+  if physicsType == p_air then
+    player.motion.y = math.max(-2, player.motion.y - 1)
+  elseif physicsType == p_liquid then
+    player.motion.y = math.max(-1, player.motion.y - 1)
+  elseif physicsType == p_solid then
+    player.motion.y = math.max(0, player.motion.y)
   end
 end
 
@@ -276,6 +321,7 @@ local function draw()
 
 --  win.setVisible(false)
 
+  term.setCursorBlink(false)
   updateLightMap()
 
   local w, h = term.getSize()
@@ -301,10 +347,16 @@ local function draw()
     end
   end
 
-  term.setCursorPos(halfW, halfH)
+  term.setCursorPos(halfW + 1, halfH + 1)
   term.blit("\xFE", "F", "F")
-  term.setCursorPos(halfW, halfH - 1)
+  term.setCursorPos(halfW + 1, halfH)
   term.blit("\xFD", "F", "F")
+
+  term.setCursorPos(1, 1)
+  term.write(string.format("(%d,%d)", player.x, player.y))
+
+  term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
+  term.setCursorBlink(true)
 
   --win.setVisible(true)
 
@@ -320,28 +372,57 @@ for i=-128, 127 do
   populateChunk(i)
 end
 
-while true do
-  draw()
+local id = startTimer(TICK_TIME)
+local lastUpdate = 0
 
-  local id = startTimer(0.1)
+if fs.exists("mim2map") then loadMap("mim2map") end
+
+while true do
   local evt = table.pack(pullEvent())
 
-  if evt[1] ~= "timer" then
-    cancelTimer(id)
-  end
+  if evt[1] == "timer" and evt[2] == id then
+    id = startTimer(TICK_TIME)
+  elseif evt[1] == "key" then
+    if evt[2] == keys.w then
+      local pAbove = getBlockInfo(player.x, player.y + 2).physics
+      local pBelow = getBlockInfo(player.x, player.y - 1).physics
 
-  if evt[1] == "key" then
-    if evt[2] == keys.w and not evt[3] then
-      player.motion.y = 2
+      if pBelow ~= p_air then
+        if pAbove == p_air then
+          player.motion.y = 2
+        elseif pAbove == p_liquid then
+          player.motion.y = 1
+        end
+      end
 
     elseif evt[2] == keys.s and not evt[3] then
       player.motion.y = -1
 
-    elseif evt[2] == keys.a then
+    elseif evt[2] == keys.a and not evt[3] then
       player.motion.x = -1
 
-    elseif evt[2] == keys.d then
+    elseif evt[2] == keys.d and not evt[3] then
       player.motion.x = 1
+
+    elseif evt[2] == keys.up then
+      player.look.y = math.min(3, player.look.y + 1)
+
+    elseif evt[2] == keys.down then
+      player.look.y = math.max(-3, player.look.y - 1)
+
+    elseif evt[2] == keys.right then
+      player.look.x = math.min(3, player.look.x + 1)
+
+    elseif evt[2] == keys.left then
+      player.look.x = math.max(-3, player.look.x - 1)
+
+    elseif evt[2] == keys.r then
+      setBlock(player.x + player.look.x + 1, player.y + player.look.y + 1, "air")
+
+    elseif evt[2] == keys.q then
+      saveMap("mim2map")
+      pullEvent("char")
+      break
     end
 
   elseif evt[1] == "key_up" then
@@ -350,7 +431,11 @@ while true do
     end
   end
 
-  tryMove()
+  if epoch("utc") - lastUpdate >= 100 then
+    draw()
+    tryMove()
+    lastUpdate = epoch("utc")
+  end
 end
 
 term.clear()
