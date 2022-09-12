@@ -234,7 +234,7 @@ end
 -- version (number) -- 1 byte; the version the map was saved on
 -- playerx (number) -- 2 bytes; the player's X coordinate
 -- playery (number) -- 1 byte; the player's Y coordinate
--- seed (number) -- 1 byte; the map seed
+-- seed (number) -- 8 bytes; the map seed
 -- nchunk (number) -- 1 byte; the number of chunks stored in the file
 -- heightmap -- 256^2 bytes; the heightmap used in world generation
 -- for each chunk:
@@ -242,6 +242,7 @@ end
 --    256x Row
 --    each Row is a RLE byte sequence totaling 256 bytes when uncompressed.
 local map = {}
+local seed = 0
 local heightmap = {}
 
 local HEADER = "\xFFMIMMAP\xFF"
@@ -262,7 +263,7 @@ local function loadMap(path)
   player.y = handle:read(1):byte()
 
   -- map seed
-  local _ = handle:read(1)
+  seed = string.unpack("<I8", handle:read(8))
 
   local title = "Loading " .. path
 
@@ -306,7 +307,7 @@ end
 local function saveMap(path)
   local handle = assert(io.open(path, "wb"))
   handle:write(HEADER ..
-    string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
+    string.pack("<I1i2I8", VERSION, player.x, player.y, seed))
 
   local title = "Saving " .. path
 
@@ -314,6 +315,7 @@ local function saveMap(path)
     if i%256==0 then
       genProgress(i+END, 65536, "Writing Heightmap", title)
     end
+
     handle:write(string.char(heightmap[i]))
   end
 
@@ -321,16 +323,21 @@ local function saveMap(path)
     if id%8==0 then
       genProgress(id+129, 256, "Saving Chunks", title)
     end
+
     if map[id] then
       handle:write(string.pack("b", id))
+
       for r=1, 256, 1 do
         local row = map[id][r]
+
         while #row > 0 do
           local char = row:sub(1, 1)
           local i = 1
+
           while row:sub(i, i) == char do
             i = i + 1
           end
+
           local tiles = row:sub(1, i-1)
           row = row:sub(i)
           handle:write(string.pack("BB", #tiles - 1, char:byte()))
@@ -560,7 +567,9 @@ local function genHeightmap(hm, minY, maxY)
 end
 
 local function populateChunk(id)
-  genProgress(id+129, 256, "Populating Chunks", "Generating World")
+  if id % 8 == 0 then
+    genProgress(id+129, 256, "Populating Chunks", "Generating World")
+  end
   local air = string.char(getBlockIDByName("air"))
   local bedrock = string.char(getBlockIDByName("bedrock"))
   local stone = string.char(getBlockIDByName("stone"))
@@ -592,7 +601,9 @@ local function populateChunk(id)
 end
 
 local function populateCaves(id)
-  genProgress(id+129, 256, "Carving Caves", "Generating World")
+  if id % 8 == 0 then
+    genProgress(id+129, 256, "Carving Caves", "Generating World")
+  end
   local ncave = math.random(1, 40)
   local offset = id * 256
 
@@ -616,7 +627,7 @@ local function populateCaves(id)
     term.setCursorPos(1, 4)
     smooth(widths, 4, 1, 1, #widths)
 
-    for i=1, #widths do
+    for i=1, #widths - 4 do
       local w = widths[i]
       local half = math.floor(w/2)
       local xp, yp = cx - half, cy + i
@@ -628,10 +639,10 @@ local function populateCaves(id)
 end
 
 local function placeOres(id)
-  genProgress(id+129, 256, "Placing Ores", "Generating World")
+  if id % 8 == 0 then
+    genProgress(id+129, 256, "Placing Ores", "Generating World")
+  end
 
-  --local redstone = string.char(getBlockIDByName("redstone_ore"))
-  --local gold = string.char(getBlockIDByName("gold_ore"))
   local stone = string.char(getBlockIDByName("stone"))
 
   local info = {
@@ -643,7 +654,7 @@ local function placeOres(id)
       -- optimum level
       optimum = 80,
       -- rate% of stone is replaced with this ore at the optimum level
-      rate = 10,
+      rate = 1,
       -- the tile
       tile = string.char(getBlockIDByName("coal_ore"))
   },
@@ -661,8 +672,24 @@ local function placeOres(id)
       min = 2,
       optimum = 11,
       rate = 0.2,
-      diamond = string.char(getBlockIDByName("diamond_ore"))
+      tile = string.char(getBlockIDByName("diamond_ore"))
     },
+
+    redstone = {
+      max = 36,
+      min = 2,
+      optimum = 14,
+      rate = 0.4,
+      tile = string.char(getBlockIDByName("redstone_ore"))
+    },
+
+    gold = {
+      max = 46,
+      min = 4,
+      optimum = 25,
+      rate = 0.3,
+      tile = string.char(getBlockIDByName("gold_ore"))
+    }
   }
 
   -- Ore distribution dropoff is linear for now, but this may change
@@ -675,9 +702,9 @@ local function placeOres(id)
 
         local percent
         if y > v.optimum then
-          percent = diff/distUp * (v.rate/100)
+          percent = diff/distUp * (v.rate/10)
         else
-          percent = diff/distDown * (v.rate/100)
+          percent = diff/distDown * (v.rate/10)
         end
 
         local layer = map[id][y]
@@ -811,7 +838,7 @@ for i=0, 15 do
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
-local function generateMap(mapName, seed, caves)
+local function generateMap(mapName, caves)
   math.randomseed(seed)
 
   genHeightmap(heightmap)
@@ -916,7 +943,8 @@ local function beginGame(mapName)
     loadMap(mapName)
 
   else
-    generateMap(mapName, math.random(0, 255))
+    seed = epoch("utc")
+    generateMap(mapName)
   end
 
   local id = startTimer(TICK_TIME)
@@ -1012,11 +1040,11 @@ local maps = ".mim2"
 fs.makeDir(maps)
 
 local function createMap()
-  local caves = false
+  local caves = true
   local opts = {
     {text = "", input = true},
     {text = "", input = true},
-    {text = "Generate Caves: No", button = true, action = function(self)
+    {text = "Generate Caves: Yes", button = true, action = function(self)
       caves = not caves
       self.text = "Generate Caves: " .. (caves and "Yes" or "No")
     end},
@@ -1031,9 +1059,11 @@ local function createMap()
 
   menu(opts, "Create World")
 
-  local name, seed = opts[1].text, tonumber(opts[2].text)
+  local name
+  name, seed = opts[1].text, tonumber(opts[2].text)
   if not seed then return end
-  generateMap(maps.."/"..name, seed, caves)
+  generateMap(maps.."/"..name, caves)
+  beginGame(maps.."/"..name)
 end
 
 local mainMenu = {
