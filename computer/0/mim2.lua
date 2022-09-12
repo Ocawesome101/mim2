@@ -8,6 +8,7 @@ local keys = rawget(_G, "keys") or require("keys")
 local fs = rawget(_G, "fs") or require("fs")
 local settings = rawget(_G, "settings") or require("settings")
 local window = rawget(_G, "window") or require("window")
+local strings = require("cc.strings")
 
 local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = (rawget(_G, "jit") or NO_LIGHT) and 0.1 or 0.2
@@ -51,6 +52,10 @@ Press Enter to continue.
 ]])
 
 do local _ = io.read() end
+
+-- create these here
+local oldTerm = term.current()
+local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
 
 ------ Block registration ------
 
@@ -154,10 +159,52 @@ local player = {
   }
 }
 
-local function genProgress(id, from, msg)
+local function offsetChar(c)
+  return string.char(math.max(0, c:byte() - 32))
+end
+
+local function drawButton(x, y, text)
+  text = text:gsub(".", offsetChar)
+  local bg = string.char(getBlockIDByName("stone")+0x60):rep(#text + 4)
+
+  for i=1, 3 do
+    term.setCursorPos(x, y+i-1)
+    term.blit(bg, ("f"):rep(#bg), ("f"):rep(#bg))
+  end
+
+  term.setCursorPos(x+1, y+1)
+  term.blit(text, ("f"):rep(#text), ("8"):rep(#text))
+end
+
+local function drawInput(x, y, text)
+  text = text:gsub(".", offsetChar)
+  local bg = string.char(getBlockIDByName("stone")+0x60):rep(#text + 4)
+
+  for i=1, 3 do
+    term.setCursorPos(x, y+i-1)
+    term.blit(bg, ("0"):rep(#bg), ("0"):rep(#bg))
+  end
+
+  term.setCursorPos(x+1, y+1)
+  term.blit(text, ("f"):rep(#text), ("0"):rep(#text))
+end
+
+local function drawTitle(title)
+  local w = term.getSize()
+  local x = math.floor(w/2 - #title/2)
+  title = ((" "):rep(x) .. title .. (" "):rep(w - x + #title)):sub(1, w)
+
+  term.setCursorPos(1, 1)
+  term.blit(title:gsub(".", offsetChar), ("f"):rep(w), ("8"):rep(w))
+end
+
+local function genProgress(id, from, msg, title)
+  term.redirect(win)
+  win.setVisible(false)
   local w, h = term.getSize()
+  term.setCursorBlink(false)
   local progress = math.ceil(w/2 * (id/from))
-  local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
+  local bg = string.char(getBlockIDByName("stone")+0x60):rep(w)
   local bar = string.char(getBlockIDByName("leaves")+0x60):rep(progress)
 
   for i=1, h do
@@ -168,7 +215,15 @@ local function genProgress(id, from, msg)
   term.setCursorPos(math.floor(w*0.25), math.floor(h/2))
   term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
   term.setCursorPos(1, h)
-  term.write(string.format("%s %d/%d", msg or "Generating Chunk", id, from))
+
+  local fmsg = string.format("%s %d/%d", msg or "Generating Chunk", id, from)
+  term.setCursorPos(math.floor(w*0.5 - (#fmsg/2)), math.floor(h/2)-1)
+  term.blit(fmsg:gsub(".", offsetChar), ("f"):rep(#fmsg), ("8"):rep(#fmsg))
+
+  if title then drawTitle(title) end
+
+  win.setVisible(true)
+  term.redirect(oldTerm)
 end
 
 ------ Map functions ------
@@ -208,9 +263,11 @@ local function loadMap(path)
   -- map seed
   local _ = handle:read(1)
 
+  local title = "Loading " .. path
+
   for i=256*-128, 256*128 do
     if i%256==0 then
-      genProgress(i+32768, 65536, "Reading Heightmap")
+      genProgress(i+32768, 65536, "Reading Heightmap", title)
     end
     heightmap[i] = handle:read(1):byte()
   end
@@ -220,7 +277,7 @@ local function loadMap(path)
   map = {}
   for ri=1, nchunk do
     if ri%8==0 then
-      genProgress(ri+129, 256, "Loading Chunks")
+      genProgress(ri+129, 256, "Loading Chunks", title)
     end
     local rawid = handle:read(1)
     if not rawid then break end
@@ -250,16 +307,18 @@ local function saveMap(path)
   handle:write(HEADER ..
     string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
 
+  local title = "Saving " .. path
+
   for i=256*-128, 256*128 do
     if i%256==0 then
-      genProgress(i+32768, 65536, "Writing Heightmap")
+      genProgress(i+32768, 65536, "Writing Heightmap", title)
     end
     handle:write(string.char(heightmap[i]))
   end
 
   for id=-128, 127 do
     if id%8==0 then
-      genProgress(id+129, 256, "Saving Chunks")
+      genProgress(id+129, 256, "Saving Chunks", title)
     end
     if map[id] then
       handle:write(string.pack("b", id))
@@ -417,6 +476,7 @@ local function updateLightMap(xe, ye, xr, yr)
     pcache[y] = {}
     local py = pcache[y]
     local pp = pcache[y+1]
+
     for x=XBASE - RADIUS, XBASE + RADIUS do
       if sources[y] and sources[y][x] then
         setItem(lightmap, x, y, levels[15])
@@ -440,11 +500,8 @@ local function updateLightMap(xe, ye, xr, yr)
   for y=math.max(1, YBASE - YRADIUS), math.min(256, YBASE + YRADIUS), 1 do
     local py = pcache[y]
     local pm = pcache[y-1]
-    for x=XBASE + RADIUS, XBASE - RADIUS, -1 do
---      if sources[y] and sources[y][x] then
---        setItem(lightmap, x, y, levels[15])
---        pcache[y][x] = 15
 
+    for x=XBASE + RADIUS, XBASE - RADIUS, -1 do
       if pm and pm[x] then
         py[x] = math.max(py[x] or -1, pm[x] - 1)
         setItem(lightmap, x, y, levels[py[x]] or "0")
@@ -491,7 +548,7 @@ local function genHeightmap()
 end
 
 local function populateChunk(id)
-  genProgress(id+129, 256)
+  genProgress(id+129, 256, "Populating Chunks", "Generating World")
   local air = string.char(getBlockIDByName("air"))
   local bedrock = string.char(getBlockIDByName("bedrock"))
   local stone = string.char(getBlockIDByName("stone"))
@@ -578,9 +635,6 @@ local function tryMove()
 end
 
 ------ Graphics ------
-local oldTerm = term.current()
-local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
-
 local function draw()
   win.reposition(1, 1, oldTerm.getSize())
   term.redirect(win)
@@ -735,20 +789,90 @@ end
 local maps = ".mim2"
 fs.makeDir(maps)
 
+local function menu(opts, title)
+  local w, h
+  local dirt = string.char(getBlockIDByName("dirt")+0x60)
+  local focused = 0
+  local scroll = 0
+
+  while true do
+    term.redirect(win)
+    win.setVisible(false)
+
+    w, h = term.getSize()
+    for i=1, h do
+      term.setCursorPos(1, i)
+      term.blit(dirt:rep(w), ("f"):rep(w), ("f"):rep(w))
+    end
+
+    local watching = {}
+
+    for i=1, #opts, 1 do
+      local pos = math.floor(w/4)
+      if opts[i].button then
+        drawButton(pos, i*4+scroll, strings.ensure_width(opts[i].text,
+          math.floor(w/2)))
+      elseif opts[i].input then
+        drawInput(pos, i*4+scroll, strings.ensure_width(
+          opts[i].text .. (focused == i and "_" or ""),
+          math.floor(w/2)))
+      end
+      watching[i] = {pos, i*4+scroll-1}
+    end
+
+    drawTitle(title)
+
+    win.setVisible(true)
+    term.redirect(oldTerm)
+
+    local event = table.pack(pullEvent())
+    if event[1] == "char" then
+      if opts[focused] then
+        opts[focused].text = opts[focused].text .. event[2]
+      end
+
+    elseif event[1] == "key" then
+      if event[2] == keys.backspace then
+        if opts[focused] and #opts[focused].text > 0 then
+          opts[focused].text = opts[focused].text:sub(1, -2)
+        end
+      end
+
+    elseif event[1] == "mouse_click" then
+      for i=1, #watching do
+        local b = watching[i]
+        if event[3] > b[1] and event[3] <= b[1] + math.floor(w/2)
+            and event[4] > b[2] and event[4] <= b[2] + 3 then
+          if opts[i].button then
+            if opts[i].action() then return end
+
+          else
+            focused = i
+          end
+        end
+      end
+
+    elseif event[1] == "mouse_scroll" then
+      scroll = math.min(0, scroll - event[2])
+    end
+  end
+end
+
 local function createMap()
-  print("<Creating Map>")
-  local name
-  repeat
-    io.write("Name> ")
-    name = io.read()
-  until #name > 1
+  local opts
+  opts = {
+    {text = "", input = true},
+    {text = "", input = true},
+    {text = "Done", button = true, action = function()
+      return #opts[1].text > 0 and #opts[2].text > 0
+    end},
+    {text = "Cancel", button = true, action = function() return true end}
+  }
 
-  local seed
-  repeat
-    io.write("Seed> ")
-    seed = tonumber(io.read())
-  until seed
+  menu(opts, "Create World")
 
+  local name, seed = opts[1].text, tonumber(opts[2].text)
+  if not seed then return end
   generateMap(maps.."/"..name, seed)
 end
 
@@ -759,36 +883,40 @@ if #files == 0 then
   files = fs.list(maps)
 end
 
-while true do
-  print("<Minecraft-in-Minecraft 2>")
+local run = true
+while run do
+  local options = {}
   term.clear()
   term.setCursorPos(1, 1)
 
   files = fs.list(maps)
   table.sort(files)
   for i=1, #files, 1 do
+    options[i] = { text = files[i], button = true, action = function()
+      beginGame(files[i])
+      return true
+    end }
     files[i] = maps.."/"..files[i]
-    print(i, files[i])
   end
 
-  print(#files+1, "[Create Map]")
-  print(#files+2, "[Quit]")
-
-  local num
-  repeat
-    io.write("MiM2> ")
-    num = tonumber(io.read())
-    if num == #files + 1 then
+  options[#options+1] = {
+    text = "Create",
+    button = true,
+    action = function()
       createMap()
-      break
-    elseif num == #files + 2 then
-      break
+      return true
     end
-  until num and files[num]
+  }
 
-  if num and files[num] then
-    beginGame(files[num])
-  elseif num == #files + 2 then
-    break
-  end
+  options[#options+1] = {
+    text = "Quit", button = true, action = function()
+      run = false
+      return true
+    end
+  }
+
+  menu(options, "Minecraft-in-Minecraft 2")
 end
+
+term.clear()
+term.setCursorPos(1, 1)
