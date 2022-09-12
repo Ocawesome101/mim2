@@ -8,7 +8,7 @@ local keys = rawget(_G, "keys") or require("keys")
 local fs = rawget(_G, "fs") or require("fs")
 local window = rawget(_G, "window") or require("window")
 
-local TICK_TIME = 0.2
+local TICK_TIME = rawget(_G, "jit") and 0.1 or 0.2
 
 local pullEvent, startTimer, epoch
 if not rawget(os, "pullEvent") then
@@ -232,7 +232,11 @@ local function saveMap(path)
         local row = map[id][r]
         while #row > 0 do
           local char = row:sub(1, 1)
-          local tiles = row:match("["..char.."]+")
+          local tiles = ""
+          while row:sub(1,1) == char do
+            tiles = tiles .. row:sub(1,1)
+            row = row:sub(2)
+          end
           row = row:sub(#tiles + 1)
           handle:write(string.pack("BB", #tiles - 1, char:byte()))
         end
