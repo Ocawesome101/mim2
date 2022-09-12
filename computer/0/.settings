@@ -1,4 +1,4 @@
 {
-  [ "mim2.no_lighting" ] = false,
+  [ "mim2.no_lighting" ] = true,
   [ "motd.enable" ] = false,
 }

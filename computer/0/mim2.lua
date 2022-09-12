@@ -12,6 +12,7 @@ local strings = require("cc.strings")
 
 local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = (rawget(_G, "jit") or NO_LIGHT) and 0.1 or 0.2
+local BEGIN, END = 256*-128, 256*128
 
 local pullEvent, startTimer, epoch
 if not rawget(os, "pullEvent") then
@@ -265,9 +266,9 @@ local function loadMap(path)
 
   local title = "Loading " .. path
 
-  for i=256*-128, 256*128 do
+  for i=BEGIN, END do
     if i%256==0 then
-      genProgress(i+32768, 65536, "Reading Heightmap", title)
+      genProgress(i+END, 65536, "Reading Heightmap", title)
     end
     heightmap[i] = handle:read(1):byte()
   end
@@ -309,9 +310,9 @@ local function saveMap(path)
 
   local title = "Saving " .. path
 
-  for i=256*-128, 256*128 do
+  for i=BEGIN, END do
     if i%256==0 then
-      genProgress(i+32768, 65536, "Writing Heightmap", title)
+      genProgress(i+END, 65536, "Writing Heightmap", title)
     end
     handle:write(string.char(heightmap[i]))
   end
@@ -368,6 +369,8 @@ end
 
 local function setItem(t, x, y, thing)
   x = x - 1
+  if x < BEGIN or x > END-256 then return end
+  if y < 2 or y > 256 then return end
   local chunk = math.ceil(x / 256)
   local diff = x - (chunk * 256)
   local layer = t[chunk][y]
@@ -517,34 +520,43 @@ end
 
 ------ Terrain Generation ------
 
--- heightmap, ported from https://www.codementor.io's heightmap tutorial
-local function genHeightmap()
-  local SCAN_RADIUS = 5
-  local SMOOTH_PASSES = 3
-  local BEGIN, END = 256*-128, 256*128
-
-  heightmap = {}
-
-  for i=BEGIN, END do
-    heightmap[i] = math.random(50, 150)
-  end
-
-  for _=1, SMOOTH_PASSES do
-    for i=BEGIN, END do
+local function smooth(tab, passes, radius, min, max)
+  min = min or BEGIN
+  max = max or END
+  for _=1, passes do
+    for i=min, max do
       local heightSum, heightCount = 0, 0
 
-      for n=i-SCAN_RADIUS, i + SCAN_RADIUS + 1 do
-        if n > BEGIN and n <= END then
-          local neighborHeight = heightmap[n]
+      for n=i-radius, i + radius + 1 do
+        if tab[n] then
+          local neighborHeight = tab[n]
           heightSum = heightSum + neighborHeight
           heightCount = heightCount + 1
         end
       end
 
       local heightAverage = heightSum / heightCount
-      heightmap[i] = math.floor(heightAverage + 0.5)
+      tab[i] = math.floor(heightAverage + 0.5)
     end
   end
+
+  return tab
+end
+
+-- heightmap, ported from https://www.codementor.io's heightmap tutorial
+local function genHeightmap(hm, minY, maxY)
+  local SCAN_RADIUS = 5
+  local SMOOTH_PASSES = 3
+
+  hm = hm or {}
+
+  for i=BEGIN, END do
+    hm[i] = math.random(minY or 50, maxY or 150)
+  end
+
+  smooth(hm, SMOOTH_PASSES, SCAN_RADIUS)
+
+  return hm
 end
 
 local function populateChunk(id)
@@ -555,9 +567,8 @@ local function populateChunk(id)
   local dirt = string.char(getBlockIDByName("dirt"))
   local grass = string.char(getBlockIDByName("grass"))
 
-  local DIRT_DEPTH = 5
-
   local offset = id * 256
+  local DIRT_DEPTH = 5
 
   for col=1, 256 do
     local height = heightmap[offset + col]
@@ -578,6 +589,118 @@ local function populateChunk(id)
   end
 
   map[id][1] = bedrock:rep(256)
+end
+
+local function populateCaves(id)
+  genProgress(id+129, 256, "Carving Caves", "Generating World")
+  local ncave = math.random(1, 40)
+  local offset = id * 256
+
+  for _=1, ncave do
+    local cx, cy = math.random(1, 256), math.random(10, 150)
+    local height = math.random(10, 20)
+    local widths = {}
+
+    for _=1, 3 do
+      widths[#widths+1] = 0
+    end
+
+    for _=1, height-6 do
+      widths[#widths+1] = math.random(8, 48)
+    end
+
+    for _=1, 3 do
+      widths[#widths+1] = 0
+    end
+
+    term.setCursorPos(1, 4)
+    smooth(widths, 4, 1, 1, #widths)
+
+    for i=1, #widths do
+      local w = widths[i]
+      local half = math.floor(w/2)
+      local xp, yp = cx - half, cy + i
+      for xo=1, w, 1 do
+        setBlock(offset+xp+xo-1, yp, "air")
+      end
+    end
+  end
+end
+
+local function placeOres(id)
+  genProgress(id+129, 256, "Placing Ores", "Generating World")
+
+  --local redstone = string.char(getBlockIDByName("redstone_ore"))
+  --local gold = string.char(getBlockIDByName("gold_ore"))
+  local stone = string.char(getBlockIDByName("stone"))
+
+  local info = {
+    coal = {
+      -- maximum level at which this can generate
+      max = 256,
+      -- minimum level ^^^
+      min = 40,
+      -- optimum level
+      optimum = 80,
+      -- rate% of stone is replaced with this ore at the optimum level
+      rate = 10,
+      -- the tile
+      tile = string.char(getBlockIDByName("coal_ore"))
+  },
+
+    iron = {
+      max = 256,
+      min = 32,
+      optimum = 60,
+      rate = 0.5,
+      tile = string.char(getBlockIDByName("iron_ore"))
+    },
+
+    diamond = {
+      max = 32,
+      min = 2,
+      optimum = 11,
+      rate = 0.2,
+      diamond = string.char(getBlockIDByName("diamond_ore"))
+    },
+  }
+
+  -- Ore distribution dropoff is linear for now, but this may change
+  -- in the future.
+  for _, v in pairs(info) do
+    for y=1, 256, 1 do
+      if y > v.min and y < v.max then
+        local diff = math.abs(y - v.optimum)
+        local distUp, distDown = v.max - v.optimum, v.optimum - v.min
+
+        local percent
+        if y > v.optimum then
+          percent = diff/distUp * (v.rate/100)
+        else
+          percent = diff/distDown * (v.rate/100)
+        end
+
+        local layer = map[id][y]
+
+        local chance = percent
+        local multiplier = 1
+        repeat
+          multiplier = multiplier * 10
+          chance = chance * 10
+        until math.floor(chance) == chance or multiplier > 10000
+
+        layer = layer:gsub(stone, function()
+          if math.random(1, multiplier) <= chance then
+            return v.tile
+          else
+            return stone
+          end
+        end)
+
+        map[id][y] = layer
+      end
+    end
+  end
 end
 
 ------ Physics ------
@@ -680,24 +803,110 @@ local function draw()
   term.redirect(oldTerm)
 end
 
+local oldPalette = {}
+
 for i=0, 15 do
+  oldPalette[i] = {term.getPaletteColor(2^i)}
   win.setPaletteColor(2^i, i/15, i/15, i/15)
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
-local function generateMap(mapName, seed)
+local function generateMap(mapName, seed, caves)
   math.randomseed(seed)
 
-  genHeightmap()
+  genHeightmap(heightmap)
 
   for i=-128, 127 do
     map[i] = {}
     populateChunk(i)
   end
 
+  for i=-128, 127 do
+    placeOres(i)
+  end
+
+  if caves then
+    for i=-128, 127 do
+      populateCaves(i)
+    end
+  end
+
   player.y = heightmap[player.x] + 50
   saveMap(mapName)
 end
+
+local function menu(opts, title)
+  local w, h
+  local dirt = string.char(getBlockIDByName("dirt")+0x60)
+  local focused = 0
+  local scroll = 0
+
+  while true do
+    w, h = term.getSize()
+    win.reposition(1, 1, w, h)
+    term.redirect(win)
+    win.setVisible(false)
+
+    for i=1, h do
+      term.setCursorPos(1, i)
+      term.blit(dirt:rep(w), ("f"):rep(w), ("f"):rep(w))
+    end
+
+    local watching = {}
+
+    for i=1, #opts, 1 do
+      local pos = math.floor(w/4)
+      if opts[i].button then
+        drawButton(pos, i*4+scroll, strings.ensure_width(opts[i].text,
+          math.floor(w/2)))
+      elseif opts[i].input then
+        if not opts[focused] then focused = i end
+
+        drawInput(pos, i*4+scroll, strings.ensure_width(
+          opts[i].text .. (focused == i and "_" or ""),
+          math.floor(w/2)))
+      end
+      watching[i] = {pos, i*4+scroll-1}
+    end
+
+    drawTitle(title)
+
+    win.setVisible(true)
+    term.redirect(oldTerm)
+
+    local event = table.pack(pullEvent())
+    if event[1] == "char" then
+      if opts[focused] then
+        opts[focused].text = opts[focused].text .. event[2]
+      end
+
+    elseif event[1] == "key" then
+      if event[2] == keys.backspace then
+        if opts[focused] and #opts[focused].text > 0 then
+          opts[focused].text = opts[focused].text:sub(1, -2)
+        end
+      end
+
+    elseif event[1] == "mouse_click" then
+      for i=1, #watching do
+        local b = watching[i]
+        if event[3] > b[1] and event[3] <= b[1] + math.floor(w/2)
+            and event[4] > b[2] and event[4] <= b[2] + 3 then
+          if opts[i].button then
+            if opts[i].action(opts[i], opts) then return end
+
+          else
+            focused = i
+          end
+        end
+      end
+
+    elseif event[1] == "mouse_scroll" then
+      scroll = math.min(0, scroll - event[2])
+    end
+  end
+end
+
 
 local function beginGame(mapName)
   if fs.exists(mapName) then
@@ -763,8 +972,21 @@ local function beginGame(mapName)
         updateLightMap()
 
       elseif evt[2] == keys.q then
-        pullEvent("char")
-        break
+        local quit = false
+        local options = {
+          {text = "Resume", button = true, action = function()
+            return true
+          end},
+          {text = "Save and Quit", button = true, action = function()
+            quit = true
+            return true
+          end}
+        }
+
+        menu(options, "Paused")
+        if quit then
+          break
+        end
       end
 
     elseif evt[1] == "key_up" then
@@ -789,82 +1011,20 @@ end
 local maps = ".mim2"
 fs.makeDir(maps)
 
-local function menu(opts, title)
-  local w, h
-  local dirt = string.char(getBlockIDByName("dirt")+0x60)
-  local focused = 0
-  local scroll = 0
-
-  while true do
-    term.redirect(win)
-    win.setVisible(false)
-
-    w, h = term.getSize()
-    for i=1, h do
-      term.setCursorPos(1, i)
-      term.blit(dirt:rep(w), ("f"):rep(w), ("f"):rep(w))
-    end
-
-    local watching = {}
-
-    for i=1, #opts, 1 do
-      local pos = math.floor(w/4)
-      if opts[i].button then
-        drawButton(pos, i*4+scroll, strings.ensure_width(opts[i].text,
-          math.floor(w/2)))
-      elseif opts[i].input then
-        drawInput(pos, i*4+scroll, strings.ensure_width(
-          opts[i].text .. (focused == i and "_" or ""),
-          math.floor(w/2)))
-      end
-      watching[i] = {pos, i*4+scroll-1}
-    end
-
-    drawTitle(title)
-
-    win.setVisible(true)
-    term.redirect(oldTerm)
-
-    local event = table.pack(pullEvent())
-    if event[1] == "char" then
-      if opts[focused] then
-        opts[focused].text = opts[focused].text .. event[2]
-      end
-
-    elseif event[1] == "key" then
-      if event[2] == keys.backspace then
-        if opts[focused] and #opts[focused].text > 0 then
-          opts[focused].text = opts[focused].text:sub(1, -2)
-        end
-      end
-
-    elseif event[1] == "mouse_click" then
-      for i=1, #watching do
-        local b = watching[i]
-        if event[3] > b[1] and event[3] <= b[1] + math.floor(w/2)
-            and event[4] > b[2] and event[4] <= b[2] + 3 then
-          if opts[i].button then
-            if opts[i].action() then return end
-
-          else
-            focused = i
-          end
-        end
-      end
-
-    elseif event[1] == "mouse_scroll" then
-      scroll = math.min(0, scroll - event[2])
-    end
-  end
-end
-
 local function createMap()
-  local opts
-  opts = {
+  local caves = false
+  local opts = {
     {text = "", input = true},
     {text = "", input = true},
-    {text = "Done", button = true, action = function()
-      return #opts[1].text > 0 and #opts[2].text > 0
+    {text = "Generate Caves: No", button = true, action = function(self)
+      caves = not caves
+      self.text = "Generate Caves: " .. (caves and "Yes" or "No")
+    end},
+    {text = "Done", button = true, action = function(_, opt)
+      if not tonumber(opt[2].text) then
+        opt[2].text = tostring(epoch("utc"))
+      end
+      return #opt[1].text > 0 and tonumber(opt[2].text)
     end},
     {text = "Cancel", button = true, action = function() return true end}
   }
@@ -873,50 +1033,100 @@ local function createMap()
 
   local name, seed = opts[1].text, tonumber(opts[2].text)
   if not seed then return end
-  generateMap(maps.."/"..name, seed)
+  generateMap(maps.."/"..name, seed, caves)
 end
 
-local files = fs.list(maps)
+local mainMenu = {
+  {text = "Play", button = true, action = function()
+    local files = fs.list(maps)
 
-if #files == 0 then
-  createMap()
-  files = fs.list(maps)
-end
-
-local run = true
-while run do
-  local options = {}
-  term.clear()
-  term.setCursorPos(1, 1)
-
-  files = fs.list(maps)
-  table.sort(files)
-  for i=1, #files, 1 do
-    options[i] = { text = files[i], button = true, action = function()
-      beginGame(files[i])
-      return true
-    end }
-    files[i] = maps.."/"..files[i]
-  end
-
-  options[#options+1] = {
-    text = "Create",
-    button = true,
-    action = function()
+    if #files == 0 then
       createMap()
-      return true
+      files = fs.list(maps)
     end
-  }
 
-  options[#options+1] = {
-    text = "Quit", button = true, action = function()
-      run = false
-      return true
+    local run = true
+    while run do
+      local options = {}
+      term.clear()
+      term.setCursorPos(1, 1)
+
+      files = fs.list(maps)
+      table.sort(files)
+      for i=1, #files, 1 do
+        options[i] = { text = files[i], button = true, action = function(self)
+          local opts = {
+            {text = "Begin Game", button = true, action = function()
+              beginGame(files[i])
+              return true
+            end},
+
+            {text = "Delete Map", button = true, action = function()
+              menu({
+                {text = "Yes", button = true, action = function()
+                  fs.delete(files[i])
+                  return true
+                end},
+
+                {text = "No", button = true, action = function()
+                  return true
+                end},
+              }, "Really Delete " .. self.text .. "?")
+
+              return true
+            end},
+
+            {text = "Back", button = true, action = function()
+              return true
+            end}
+          }
+
+          menu(opts, self.text)
+          return true
+        end }
+        files[i] = maps.."/"..files[i]
+      end
+
+      options[#options+1] = {
+        text = "Create",
+        button = true,
+        action = function()
+          createMap()
+          return true
+        end
+      }
+
+      options[#options+1] = {
+        text = "Back", button = true, action = function()
+          run = false
+          return true
+        end
+      }
+
+      local result = table.pack(pcall(menu, options, "Select World"))
+      term.setCursorPos(1, 5)
+      assert(table.unpack(result))
     end
-  }
+  end},
 
-  menu(options, "Minecraft-in-Minecraft 2")
-end
+  {text = "Lighting: " .. (NO_LIGHT and "Off" or "On"),
+    button = true, action = function(self)
+      NO_LIGHT = not NO_LIGHT
+      settings.set("mim2.no_lighting", NO_LIGHT)
+      self.text = "Lighting: " .. (NO_LIGHT and "Off" or "On")
+    end
+  },
+
+  {text = "Quit", button = true, action = function()
+    return true
+  end}
+}
+
+menu(mainMenu, "Minecraft-in-Minecraft 2")
 
 term.clear()
 term.setCursorPos(1, 1)
+
+for i=0, 15 do
+  term.setPaletteColor(2^i, table.unpack(oldPalette[i]))
+end
