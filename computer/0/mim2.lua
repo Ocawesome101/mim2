@@ -5,9 +5,10 @@
 -- Supports Recrafted!
 local term = rawget(_G, "term") or require("term")
 local keys = rawget(_G, "keys") or require("keys")
---local window = rawget(_G, "window") or require("window")
+local fs = rawget(_G, "fs") or require("fs")
+local window = rawget(_G, "window") or require("window")
 
-local TICK_TIME = 0.1
+local TICK_TIME = 0.2
 
 local pullEvent, startTimer, epoch
 if not rawget(os, "pullEvent") then
@@ -85,6 +86,26 @@ local blocks = {
   {
     name = "grass",
     tex = 0x6B
+  },
+  {
+    name = "log",
+    tex = 0x6C
+  },
+  {
+    name = "leaves",
+    tex = 0x6D
+  },
+  {
+    name = "ladder",
+    tex = 0x6E,
+    physics = p_liquid,
+    transparent = true
+  },
+  {
+    name = "torch",
+    tex = 0x6F,
+    physics = p_air,
+    transparent = true
   }
 }
 
@@ -121,11 +142,13 @@ local player = {
 -- playery (number) -- 1 byte; the player's Y coordinate
 -- seed (number) -- 1 byte; the map seed
 -- nchunk (number) -- 1 byte; the number of chunks stored in the file
+-- heightmap -- 256^2 bytes; the heightmap used in world generation
 -- for each chunk:
 --    x -- 1 byte; signed chunk ID
 --    256x Row
 --    each Row is a RLE byte sequence totaling 256 bytes when uncompressed.
 local map = {}
+local heightmap = {}
 
 local HEADER = "\xFFMIMMAP\xFF"
 local VERSION = 1
@@ -147,10 +170,22 @@ local function loadMap(path)
   -- map seed
   local _ = handle:read(1)
 
+  for i=256*-128, 256*128 do
+    if i%256==0 then
+      term.setCursorPos(1, 2)
+      term.write(string.format("heightmap... %d/%d", i+32768, 65536))
+    end
+    heightmap[i] = handle:read(1):byte()
+  end
+
   local nchunk = handle:read(1):byte()
 
   map = {}
-  for _=1, nchunk do
+  for ri=1, nchunk do
+    if ri%8==0 then
+      term.setCursorPos(1, 3)
+      term.write(string.format("chunks... %d/%d", ri+129, 256))
+    end
     local rawid = handle:read(1)
     if not rawid then break end
 
@@ -178,14 +213,26 @@ local function saveMap(path)
   handle:write(HEADER ..
     string.pack("<I1i2I1", VERSION, player.x, player.y, 0))
 
+  for i=256*-128, 256*128 do
+    if i%256==0 then
+      term.setCursorPos(1, 2)
+      term.write(string.format("heightmap... %d/%d", i+32768, 65536))
+    end
+    handle:write(string.char(heightmap[i]))
+  end
+
   for id=-128, 127 do
+    if id%8==0 then
+      term.setCursorPos(1, 3)
+      term.write(string.format("chunks... %d/%d", id+129, 256))
+    end
     if map[id] then
       handle:write(string.pack("b", id))
       for r=1, 256, 1 do
         local row = map[id][r]
         while #row > 0 do
           local char = row:sub(1, 1)
-          local tiles = row:match("%"..char.."+")
+          local tiles = row:match("["..char.."]+")
           row = row:sub(#tiles + 1)
           handle:write(string.pack("BB", #tiles - 1, char:byte()))
         end
@@ -198,10 +245,9 @@ end
 
 local function getStrip(t, y, x1, x2)
   local chunk1, chunk2 = math.ceil(x1 / 256), math.ceil(x2 / 256)
-  local offset1, offset2 = x2 - (chunk1 * 256), x2 - (chunk2 * 256)
+  local offset1, offset2 = x1 - (chunk1 * 256) - 1, x2 - (chunk2 * 256) - 1
 
   if chunk1 == chunk2 then
---    print(chunk1, chunk2, offset1, offset2)
     return t[chunk1][y]:sub(offset1, offset2)
 
   else
@@ -220,7 +266,23 @@ local function getStrip(t, y, x1, x2)
 
     return begin .. middle .. _end
   end
+end
 
+local function setItem(t, x, y, thing)
+  x = x - 1
+  local chunk = math.ceil(x / 256)
+  local diff = x - (chunk * 256)
+  local layer = t[chunk][y]
+  if diff == -256 then
+    t[chunk][y] = thing .. layer:sub(2)
+  elseif diff == 0 then
+    t[chunk][y] = layer:sub(0, diff - 2) .. thing
+  else
+    t[chunk][y] = (layer:sub(0, diff - 2) .. thing .. layer:sub(diff))
+  end
+  if #t[chunk][y] ~= 256 then
+    error(diff)
+  end
 end
 
 local function getBlockStrip(y, x1, x2)
@@ -236,10 +298,7 @@ local function getBlockInfo(x, y)
 end
 
 local function setBlock(x, y, id)
-  local chunk = math.floor(x / 256)
-  local diff = x - (chunk * 256)
-  local layer = map[chunk][y]
-  map[chunk][y] = layer:sub(0, diff - 2) .. string.char(getBlockIDByName(id)) .. layer:sub(diff)
+  return setItem(map, x, y, string.char(getBlockIDByName(id)))
 end
 
 ------ Lighting ------
@@ -250,12 +309,109 @@ local function getLightStrip(y, x1, x2)
   return getStrip(lightmap, y, x1, x2)
 end
 
-local function updateLightMap()
+local function initializeLightMap()
   for chunk=-128, 127, 1 do
-    if map[chunk] then
-      lightmap[chunk] = lightmap[chunk] or {}
-      for y=1, 256, 1 do
-        lightmap[chunk][y] = ("f"):rep(256)
+    lightmap[chunk] = lightmap[chunk] or {}
+    for y=1, 256, 1 do
+      lightmap[chunk][y] = ("6"):rep(256)
+    end
+  end
+end
+
+local levels = {}
+for i=0, 15 do
+  levels[i] = string.format("%x", i)
+end
+
+local __something = 0
+local function sfind(s, b)
+  return s:find(b, __something)
+end
+
+local function updateLightMap(xe, ye, xr, yr)
+  -- only processes subsections of the map for efficiency reasons.
+  local w, h = term.getSize()
+  local RADIUS = math.ceil(w / 2) + 15
+  local YRADIUS = math.ceil(h / 2) + 15
+
+  local XBASE, YBASE = player.x, player.y
+
+  if xe and ye and xr and yr then
+    XBASE, YBASE, RADIUS, YRADIUS = xe, ye, xr, yr
+  end
+
+  local torch = string.char(getBlockIDByName("torch"))
+  local sources = {}
+  local cache = {}
+
+  -- find torches
+  for y=math.max(1, YBASE - YRADIUS), math.min(256, YBASE + YRADIUS) do
+    sources[y] = {}
+    local blockstrip = getBlockStrip(y, XBASE - RADIUS, XBASE + RADIUS)
+    cache[y] = blockstrip
+    __something = 0
+    for _torch in sfind, blockstrip, torch do
+      __something = __something + _torch
+      sources[y][XBASE - RADIUS + _torch] = {XBASE - RADIUS + _torch, y}
+    end
+  end
+
+  -- find skylight
+  for x=1, RADIUS + RADIUS + 1 do
+    for y=math.min(256, YBASE + YRADIUS), math.max(1, YBASE - YRADIUS), -1 do
+      local id = cache[y]:byte(x)
+      if not blocks[id].transparent then
+        break
+      else
+        sources[y][XBASE - RADIUS + x] = {XBASE - RADIUS + x, y}
+      end
+    end
+  end
+
+  local pcache = {}
+
+  -- propagate light: stage 1
+  for y=math.min(256, YBASE + YRADIUS),
+      math.max(1, YBASE - YRADIUS), -1 do
+    pcache[y] = {}
+    local py = pcache[y]
+    local pp = pcache[y+1]
+    for x=XBASE - RADIUS, XBASE + RADIUS do
+      if sources[y] and sources[y][x] then
+        setItem(lightmap, x, y, levels[15])
+        py[x] = 15
+
+      else
+        if py and py[x-1] then
+          py[x] = math.max(py[x] or 0, py[x-1] - 1)
+          setItem(lightmap, x, y, levels[py[x]] or "0")
+        end
+
+        if pp and pp[x] then
+          py[x] = math.max(py[x] or 0, pp[x] - 1)
+          setItem(lightmap, x, y, levels[py[x]] or "0")
+        end
+      end
+    end
+  end
+
+  -- propagate light: stage 2
+  for y=math.max(1, YBASE - YRADIUS), math.min(256, YBASE + YRADIUS), 1 do
+    local py = pcache[y]
+    local pm = pcache[y-1]
+    for x=XBASE + RADIUS, XBASE - RADIUS, -1 do
+--      if sources[y] and sources[y][x] then
+--        setItem(lightmap, x, y, levels[15])
+--        pcache[y][x] = 15
+
+      if pm and pm[x] then
+        py[x] = math.max(py[x] or -1, pm[x] - 1)
+        setItem(lightmap, x, y, levels[py[x]] or "0")
+      end
+
+      if py and py[x+1] then
+        py[x] = math.max(py[x] or -1, py[x+1] - 1)
+        setItem(lightmap, x, y, levels[py[x]] or "0")
       end
     end
   end
@@ -263,13 +419,12 @@ end
 
 ------ Terrain Generation ------
 
-local heightmap = {}
-
 local function genProgress(id, from)
   local w, h = term.getSize()
   local progress = math.ceil(w * (id/from))
   local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
   local bar = string.char(getBlockIDByName("stone")+0x60):rep(progress)
+
   for i=1, h do
     term.setCursorPos(1, i)
     term.blit(bg, ("f"):rep(w), ("f"):rep(w))
@@ -346,6 +501,8 @@ end
 
 ------ Physics ------
 local function tryMovePartial(x, y)
+  local moved
+
   local newX, newY = player.x + x, player.y + y
 
   local nxHead, nxFoot = getBlockInfo(newX, player.y + 1).physics,
@@ -353,17 +510,22 @@ local function tryMovePartial(x, y)
 
   if nxHead ~= p_solid and nxFoot ~= p_solid then
     player.x = newX
+    moved = true
   end
 
   local nyHead, nyFoot = getBlockInfo(newX, newY + 1).physics,
     getBlockInfo(newX, newY).physics
+
   if nyHead ~= p_solid and nyFoot ~= p_solid then
     player.y = newY
+    moved = true
   end
 
+  return moved
 end
 
 local function tryMove()
+  local moved = false
   local physicsType = getBlockInfo(player.x, player.y - 1).physics
 
   if physicsType == p_air then
@@ -377,26 +539,31 @@ local function tryMove()
   local mx, my = player.motion.x, player.motion.y
 
   for _=1, math.abs(mx) do
-    tryMovePartial(mx/math.abs(mx), 0)
+    local m = tryMovePartial(mx/math.abs(mx), 0)
+    moved = moved or m
   end
 
   for _=1, math.abs(my) do
-    tryMovePartial(0, my/math.abs(my))
+    local m = tryMovePartial(0, my/math.abs(my))
+    moved = moved or m
+  end
+
+  if moved then
+    updateLightMap()
   end
 end
 
 ------ Graphics ------
---local oldTerm = term.current()
---local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
+local oldTerm = term.current()
+local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
 
 local function draw()
---  win.reposition(1, 1, oldTerm.getSize())
-  --term.redirect(win)
+  win.reposition(1, 1, oldTerm.getSize())
+  term.redirect(win)
 
---  win.setVisible(false)
+  win.setVisible(false)
 
   term.setCursorBlink(false)
-  updateLightMap()
 
   local w, h = term.getSize()
   local halfW, halfH = math.floor(w/2), math.floor(h/2)
@@ -406,13 +573,14 @@ local function draw()
       local block = getBlockStrip(y, player.x - halfW, player.x + halfW)
       local light = getLightStrip(y, player.x - halfW, player.x + halfW)
 
-
       block = block:gsub(".", function(c)
         return string.char(blocks[string.byte(c)].tex)
       end)
 
-      --print(h - (y - player.y + halfH))
       term.setCursorPos(1, h - (y - player.y + halfH))
+      if #block ~= #light then
+        print(#block, #light)
+      end
       term.blit(block, light, light)
     else
       term.setCursorPos(1, h - (y - player.y + halfH))
@@ -426,31 +594,41 @@ local function draw()
   term.setCursorPos(halfW + 1, halfH)
   term.blit("\xFD", "F", "F")
 
-  term.setCursorPos(1, 1)
-  term.write(string.format("(%d,%d)", player.x, player.y))
-
   term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
   term.setCursorBlink(true)
 
-  --win.setVisible(true)
+  win.setVisible(true)
 
---  term.redirect(oldTerm)
+  term.redirect(oldTerm)
 end
 
 for i=0, 15 do
+  win.setPaletteColor(2^i, i/15, i/15, i/15)
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
-genHeightmap()
-for i=-128, 127 do
-  map[i] = {}
-  populateChunk(i)
+if fs.exists("mim2map") then
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("Loading World")
+  loadMap("mim2map")
+
+else
+  genHeightmap()
+
+  for i=-128, 127 do
+    map[i] = {}
+    populateChunk(i)
+  end
+
+  player.y = heightmap[player.x] + 1
 end
 
 local id = startTimer(TICK_TIME)
 local lastUpdate = 0
 
-if fs.exists("mim2map") then loadMap("mim2map") end
+initializeLightMap()
+updateLightMap()
 
 while true do
   local evt = table.pack(pullEvent())
@@ -492,10 +670,11 @@ while true do
       player.look.x = math.max(-3, player.look.x - 1)
 
     elseif evt[2] == keys.r then
-      setBlock(player.x + player.look.x + 1, player.y + player.look.y + 1, "air")
+      setBlock(player.x + player.look.x + 1,
+        player.y + player.look.y + 1, "air")
+      updateLightMap()
 
     elseif evt[2] == keys.q then
-      saveMap("mim2map")
       pullEvent("char")
       break
     end
@@ -506,7 +685,7 @@ while true do
     end
   end
 
-  if epoch("utc") - lastUpdate >= 100 then
+  if epoch("utc") - lastUpdate >= 1000*TICK_TIME then
     draw()
     tryMove()
     lastUpdate = epoch("utc")
@@ -515,3 +694,5 @@ end
 
 term.clear()
 term.setCursorPos(1,1)
+print("Saving World")
+saveMap("mim2map")
