@@ -45,6 +45,7 @@ Controls:
      F - place block
      Q - pause/quit
 Arrows - move block selection
+1 to 9 - select block slot
 
 Press Enter to continue.
 ]])
@@ -153,6 +154,23 @@ local player = {
   }
 }
 
+local function genProgress(id, from, msg)
+  local w, h = term.getSize()
+  local progress = math.ceil(w * (id/from))
+  local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
+  local bar = string.char(getBlockIDByName("stone")+0x60):rep(progress)
+
+  for i=1, h do
+    term.setCursorPos(1, i)
+    term.blit(bg, ("f"):rep(w), ("f"):rep(w))
+  end
+
+  term.setCursorPos(1, math.floor(h/2))
+  term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
+  term.setCursorPos(1, h)
+  term.write(string.format("%s %d/%d", msg or "Generating Chunk", id, from))
+end
+
 ------ Map functions ------
 -- map[chunkID][rowID] = "256 char string"
 -- map storage format:
@@ -192,8 +210,7 @@ local function loadMap(path)
 
   for i=256*-128, 256*128 do
     if i%256==0 then
-      term.setCursorPos(1, 2)
-      term.write(string.format("heightmap... %d/%d", i+32768, 65536))
+      genProgress(i+32768, 65536, "Reading Heightmap")
     end
     heightmap[i] = handle:read(1):byte()
   end
@@ -203,8 +220,7 @@ local function loadMap(path)
   map = {}
   for ri=1, nchunk do
     if ri%8==0 then
-      term.setCursorPos(1, 3)
-      term.write(string.format("chunks... %d/%d", ri+129, 256))
+      genProgress(ri+129, 256, "Loading Chunks")
     end
     local rawid = handle:read(1)
     if not rawid then break end
@@ -236,16 +252,14 @@ local function saveMap(path)
 
   for i=256*-128, 256*128 do
     if i%256==0 then
-      term.setCursorPos(1, 2)
-      term.write(string.format("heightmap... %d/%d", i+32768, 65536))
+      genProgress(i+32768, 65536, "Writing Heightmap")
     end
     handle:write(string.char(heightmap[i]))
   end
 
   for id=-128, 127 do
     if id%8==0 then
-      term.setCursorPos(1, 3)
-      term.write(string.format("chunks... %d/%d", id+129, 256))
+      genProgress(id+129, 256, "Saving Chunks")
     end
     if map[id] then
       handle:write(string.pack("b", id))
@@ -446,23 +460,6 @@ end
 
 ------ Terrain Generation ------
 
-local function genProgress(id, from)
-  local w, h = term.getSize()
-  local progress = math.ceil(w * (id/from))
-  local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
-  local bar = string.char(getBlockIDByName("stone")+0x60):rep(progress)
-
-  for i=1, h do
-    term.setCursorPos(1, i)
-    term.blit(bg, ("f"):rep(w), ("f"):rep(w))
-  end
-
-  term.setCursorPos(1, math.floor(h/2))
-  term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
-  term.setCursorPos(1, h)
-  term.write(string.format("Generating Chunk %d/%d", id, from))
-end
-
 -- heightmap, ported from https://www.codementor.io's heightmap tutorial
 local function genHeightmap()
   local SCAN_RADIUS = 5
@@ -634,8 +631,21 @@ for i=0, 15 do
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
-local function beginGame(mapName)
+local function generateMap(mapName, seed)
+  math.randomseed(seed)
 
+  genHeightmap()
+
+  for i=-128, 127 do
+    map[i] = {}
+    populateChunk(i)
+  end
+
+  player.y = heightmap[player.x] + 50
+  saveMap(mapName)
+end
+
+local function beginGame(mapName)
   if fs.exists(mapName) then
     term.clear()
     term.setCursorPos(1, 1)
@@ -643,14 +653,7 @@ local function beginGame(mapName)
     loadMap(mapName)
 
   else
-    genHeightmap()
-
-    for i=-128, 127 do
-      map[i] = {}
-      populateChunk(i)
-    end
-
-    player.y = heightmap[player.x] + 50
+    generateMap(mapName, math.random(0, 255))
   end
 
   local id = startTimer(TICK_TIME)
@@ -732,4 +735,59 @@ end
 local maps = ".mim2"
 fs.makeDir(maps)
 
+local function createMap()
+  print("<Creating Map>")
+  local name
+  repeat
+    io.write("Name> ")
+    name = io.read()
+  until #name > 1
 
+  local seed
+  repeat
+    io.write("Seed> ")
+    seed = tonumber(io.read())
+  until seed
+
+  generateMap(name, seed)
+end
+
+local files = fs.list(maps)
+
+if #files == 0 then
+  createMap()
+  files = fs.list(maps)
+end
+
+while true do
+  print("<Minecraft-in-Minecraft 2>")
+  term.clear()
+  term.setCursorPos(1, 1)
+
+  files = fs.list(maps)
+  table.sort(files)
+  for i=1, #files, 1 do
+    files[i] = maps.."/"..files[i]
+    print(i, files[i])
+  end
+
+  print(#files+1, "[Create Map]")
+  print(#files+2, "[Quit]")
+
+  local num
+  repeat
+    io.write("MiM2> ")
+    num = tonumber(io.read())
+    if num == #files + 1 then
+      createMap()
+    elseif num == #files + 2 then
+      break
+    end
+  until num and files[num]
+
+  if num and files[num] then
+    beginGame(files[num])
+  elseif num == #files + 2 then
+    break
+  end
+end
