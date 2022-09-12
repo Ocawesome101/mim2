@@ -6,9 +6,11 @@
 local term = rawget(_G, "term") or require("term")
 local keys = rawget(_G, "keys") or require("keys")
 local fs = rawget(_G, "fs") or require("fs")
+local settings = rawget(_G, "settings") or require("settings")
 local window = rawget(_G, "window") or require("window")
 
-local TICK_TIME = rawget(_G, "jit") and 0.1 or 0.2
+local NO_LIGHT = settings.get("mim2.no_lighting")
+local TICK_TIME = (rawget(_G, "jit") or NO_LIGHT) and 0.1 or 0.2
 
 local pullEvent, startTimer, epoch
 if not rawget(os, "pullEvent") then
@@ -20,14 +22,32 @@ else
     rawget(os, "startTimer"), rawget(os, "epoch")
 end
 
-print("Please ensure that the necessary custom font is installed.")
-print("If it is, then the following text will appear as a row of blocks:")
+print([[Please ensure that the necessary custom font is installed.
+If it is, then the following text will appear as a row of blocks:]])
 for i=0x80, 0x8F do
   io.write(string.char(i))
 end
-print("\nIf it does not appear as a row of blocks, install the font or game graphics will be garbled.  Font installation instructions are in the Minecraft-in-Minecraft 2 README file.\n")
-print("If the font IS present, press Enter to continue.")
-print("Otherwise, hold Ctrl-T to stop the program.")
+print([[
+
+If it does not appear as a row of blocks, install the font or game graphics will be garbled.  Font installation instructions are in the Minecraft-in-Minecraft 2 README file.
+
+]])
+print([[
+If the font IS present, press Enter to continue.
+Otherwise, hold Ctrl-T to stop the program.]])
+
+do local _ = io.read() end
+
+print([[
+Controls:
+  WASD - move
+     R - remove block
+     F - place block
+     Q - pause/quit
+Arrows - move block selection
+
+Press Enter to continue.
+]])
 
 do local _ = io.read() end
 
@@ -197,7 +217,8 @@ local function loadMap(path)
       local length = 0
 
       repeat
-        local count = handle:read(1):byte()
+        local count = (handle:read(1) or ""):byte()
+        if not count then break end
         local tile = handle:read(1):byte()
         row = row .. string.char(tile):rep(count + 1)
         length = length + count + 1
@@ -232,12 +253,12 @@ local function saveMap(path)
         local row = map[id][r]
         while #row > 0 do
           local char = row:sub(1, 1)
-          local tiles = ""
-          while row:sub(1,1) == char do
-            tiles = tiles .. row:sub(1,1)
-            row = row:sub(2)
+          local i = 1
+          while row:sub(i, i) == char do
+            i = i + 1
           end
-          row = row:sub(#tiles + 1)
+          local tiles = row:sub(1, i-1)
+          row = row:sub(i)
           handle:write(string.pack("BB", #tiles - 1, char:byte()))
         end
       end
@@ -317,7 +338,7 @@ local function initializeLightMap()
   for chunk=-128, 127, 1 do
     lightmap[chunk] = lightmap[chunk] or {}
     for y=1, 256, 1 do
-      lightmap[chunk][y] = ("6"):rep(256)
+      lightmap[chunk][y] = ("f"):rep(256)
     end
   end
 end
@@ -333,6 +354,8 @@ local function sfind(s, b)
 end
 
 local function updateLightMap(xe, ye, xr, yr)
+  if NO_LIGHT then return end
+
   -- only processes subsections of the map for efficiency reasons.
   local w, h = term.getSize()
   local RADIUS = math.ceil(w / 2) + 15
@@ -437,7 +460,7 @@ local function genProgress(id, from)
   term.setCursorPos(1, math.floor(h/2))
   term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
   term.setCursorPos(1, h)
-  term.write(string.format("%d/%d", id, from))
+  term.write(string.format("Generating Chunk %d/%d", id, from))
 end
 
 -- heightmap, ported from https://www.codementor.io's heightmap tutorial
@@ -611,92 +634,102 @@ for i=0, 15 do
   term.setPaletteColor(2^i, i/15, i/15, i/15)
 end
 
-if fs.exists("mim2map") then
-  term.clear()
-  term.setCursorPos(1, 1)
-  print("Loading World")
-  loadMap("mim2map")
+local function beginGame(mapName)
 
-else
-  genHeightmap()
+  if fs.exists(mapName) then
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("Loading World")
+    loadMap(mapName)
 
-  for i=-128, 127 do
-    map[i] = {}
-    populateChunk(i)
+  else
+    genHeightmap()
+
+    for i=-128, 127 do
+      map[i] = {}
+      populateChunk(i)
+    end
+
+    player.y = heightmap[player.x] + 50
   end
 
-  player.y = heightmap[player.x] + 1
-end
+  local id = startTimer(TICK_TIME)
+  local lastUpdate = 0
 
-local id = startTimer(TICK_TIME)
-local lastUpdate = 0
+  initializeLightMap()
+  updateLightMap()
 
-initializeLightMap()
-updateLightMap()
+  while true do
+    local evt = table.pack(pullEvent())
 
-while true do
-  local evt = table.pack(pullEvent())
+    if evt[1] == "timer" and evt[2] == id then
+      id = startTimer(TICK_TIME)
 
-  if evt[1] == "timer" and evt[2] == id then
-    id = startTimer(TICK_TIME)
-  elseif evt[1] == "key" then
-    if evt[2] == keys.w then
-      local pAbove = getBlockInfo(player.x, player.y + 2).physics
-      local pBelow = getBlockInfo(player.x, player.y - 1).physics
+    elseif evt[1] == "key" then
+      if evt[2] == keys.w then
+        local pAbove = getBlockInfo(player.x, player.y + 2).physics
+        local pBelow = getBlockInfo(player.x, player.y - 1).physics
 
-      if pBelow ~= p_air then
-        if pAbove == p_air then
-          player.motion.y = 2
-        elseif pAbove == p_liquid then
-          player.motion.y = 1
+        if pBelow ~= p_air then
+          if pAbove == p_air then
+            player.motion.y = 2
+
+          elseif pAbove == p_liquid then
+            player.motion.y = 1
+          end
         end
+
+      elseif evt[2] == keys.s and not evt[3] then
+        player.motion.y = -1
+
+      elseif evt[2] == keys.a and not evt[3] then
+        player.motion.x = -1
+
+      elseif evt[2] == keys.d and not evt[3] then
+        player.motion.x = 1
+
+      elseif evt[2] == keys.up then
+        player.look.y = math.min(3, player.look.y + 1)
+
+      elseif evt[2] == keys.down then
+        player.look.y = math.max(-3, player.look.y - 1)
+
+      elseif evt[2] == keys.right then
+        player.look.x = math.min(3, player.look.x + 1)
+
+      elseif evt[2] == keys.left then
+        player.look.x = math.max(-3, player.look.x - 1)
+
+      elseif evt[2] == keys.r then
+        setBlock(player.x + player.look.x + 1,
+          player.y + player.look.y + 1, "air")
+        updateLightMap()
+
+      elseif evt[2] == keys.q then
+        pullEvent("char")
+        break
       end
 
-    elseif evt[2] == keys.s and not evt[3] then
-      player.motion.y = -1
-
-    elseif evt[2] == keys.a and not evt[3] then
-      player.motion.x = -1
-
-    elseif evt[2] == keys.d and not evt[3] then
-      player.motion.x = 1
-
-    elseif evt[2] == keys.up then
-      player.look.y = math.min(3, player.look.y + 1)
-
-    elseif evt[2] == keys.down then
-      player.look.y = math.max(-3, player.look.y - 1)
-
-    elseif evt[2] == keys.right then
-      player.look.x = math.min(3, player.look.x + 1)
-
-    elseif evt[2] == keys.left then
-      player.look.x = math.max(-3, player.look.x - 1)
-
-    elseif evt[2] == keys.r then
-      setBlock(player.x + player.look.x + 1,
-        player.y + player.look.y + 1, "air")
-      updateLightMap()
-
-    elseif evt[2] == keys.q then
-      pullEvent("char")
-      break
+    elseif evt[1] == "key_up" then
+      if evt[2] == keys.a or evt[2] == keys.d then
+        player.motion.x = 0
+      end
     end
 
-  elseif evt[1] == "key_up" then
-    if evt[2] == keys.a or evt[2] == keys.d then
-      player.motion.x = 0
+    if epoch("utc") - lastUpdate >= 1000*TICK_TIME then
+      draw()
+      tryMove()
+      lastUpdate = epoch("utc")
     end
   end
 
-  if epoch("utc") - lastUpdate >= 1000*TICK_TIME then
-    draw()
-    tryMove()
-    lastUpdate = epoch("utc")
-  end
+  term.clear()
+  term.setCursorPos(1,1)
+  print("Saving World")
+  saveMap(mapName)
 end
 
-term.clear()
-term.setCursorPos(1,1)
-print("Saving World")
-saveMap("mim2map")
+local maps = ".mim2"
+fs.makeDir(maps)
+
+
