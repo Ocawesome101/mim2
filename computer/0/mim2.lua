@@ -156,16 +156,16 @@ local player = {
 
 local function genProgress(id, from, msg)
   local w, h = term.getSize()
-  local progress = math.ceil(w * (id/from))
+  local progress = math.ceil(w/2 * (id/from))
   local bg = string.char(getBlockIDByName("dirt")+0x60):rep(w)
-  local bar = string.char(getBlockIDByName("stone")+0x60):rep(progress)
+  local bar = string.char(getBlockIDByName("leaves")+0x60):rep(progress)
 
   for i=1, h do
     term.setCursorPos(1, i)
     term.blit(bg, ("f"):rep(w), ("f"):rep(w))
   end
 
-  term.setCursorPos(1, math.floor(h/2))
+  term.setCursorPos(math.floor(w*0.25), math.floor(h/2))
   term.blit(bar, ("f"):rep(#bar), ("f"):rep(#bar))
   term.setCursorPos(1, h)
   term.write(string.format("%s %d/%d", msg or "Generating Chunk", id, from))
@@ -749,7 +749,7 @@ local function createMap()
     seed = tonumber(io.read())
   until seed
 
-  generateMap(name, seed)
+  generateMap(maps.."/"..name, seed)
 end
 
 local files = fs.list(maps)
@@ -780,6 +780,7 @@ while true do
     num = tonumber(io.read())
     if num == #files + 1 then
       createMap()
+      break
     elseif num == #files + 2 then
       break
     end
