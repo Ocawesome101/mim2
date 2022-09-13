@@ -11,7 +11,7 @@ local window = rawget(_G, "window") or require("window")
 local strings = require("cc.strings")
 
 local NO_LIGHT = settings.get("mim2.no_lighting")
-local TICK_TIME = (rawget(_G, "jit") or NO_LIGHT) and 0.1 or 0.2
+local TICK_TIME = 0.1
 local BEGIN, END = 256*-128, 256*128
 
 local pullEvent, startTimer, epoch, sleep
@@ -426,7 +426,7 @@ local function setItem(t, x, y, thing)
   local diff = x - (chunk * 256)
   local layer = t[chunk][y]
 
-  if diff < 0 then diff = diff + 256 end
+  if diff <= 0 then diff = diff + 256 end
 
   layer[diff] = thing
 --[[
