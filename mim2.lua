@@ -429,17 +429,6 @@ local function setItem(t, x, y, thing)
   if diff <= 0 then diff = diff + 256 end
 
   layer[diff] = thing
---[[
-  if diff == -256 then
-    layer[1] = thing
---    t[chunk][y] = thing .. layer:sub(2)
-  elseif diff == 0 then
-    layer[#layer] = thing
---    t[chunk][y] = layer:sub(0, diff - 2) .. thing
-  else
-    layer[diff-1] = thing
---    t[chunk][y] = (layer:sub(0, diff - 2) .. thing .. layer:sub(diff))
-  end--]]
 
   if #t[chunk][y] ~= 256 then
     error(diff)
@@ -893,7 +882,6 @@ local function draw()
   term.setCursorPos(halfW + 1, halfH)
   term.blit("\xFD", lightBot[1], "F")
 
-  -- [=[
   for i=1, #player.inventory do
     term.setCursorPos(1, i)
     local slot = player.inventory[i]
@@ -906,8 +894,8 @@ local function draw()
       term.setBackgroundColor(2^10)
     end
 
-    term.write((" "..blocks[slot[1]].name.." x"..slot[2]):gsub(".", offsetChar))
-  end--]=]
+    term.write((" x"..slot[2]):gsub(".", offsetChar))
+  end
 
   term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
   term.setCursorBlink(true)
