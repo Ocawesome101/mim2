@@ -14,14 +14,14 @@ local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = (rawget(_G, "jit") or NO_LIGHT) and 0.1 or 0.2
 local BEGIN, END = 256*-128, 256*128
 
-local pullEvent, startTimer, epoch
+local pullEvent, startTimer, epoch, sleep
 if not rawget(os, "pullEvent") then
   local rc = require("rc")
-  pullEvent, startTimer, epoch = rc.pullEventRaw, rc.startTimer,
-    rc.epoch
+  pullEvent, startTimer, epoch, sleep = rc.pullEventRaw, rc.startTimer,
+    rc.epoch, rc.sleep
 else
-  pullEvent, startTimer, epoch = rawget(os, "pullEventRaw"),
-    rawget(os, "startTimer"), rawget(os, "epoch")
+  pullEvent, startTimer, epoch, sleep = rawget(os, "pullEventRaw"),
+    rawget(os, "startTimer"), rawget(os, "epoch"), rawget(os, "sleep")
 end
 
 print([[Please ensure that the necessary custom font is installed.
@@ -157,6 +157,11 @@ local player = {
   -- Where you're looking, relative to the player
   look = {
     x = 2, y = 0,
+  },
+  selected = 1,
+  -- first 9 slots are hotbar
+  inventory = {
+    [1] = {getBlockIDByName("torch"), 64}
   }
 }
 
@@ -227,6 +232,14 @@ local function genProgress(id, from, msg, title)
   term.redirect(oldTerm)
 end
 
+local lastYield = epoch("utc")
+local function ensureTimeSafety()
+  if epoch("utc") - lastYield > 4000 then
+    sleep(0)
+    lastYield = epoch("utc")
+  end
+end
+
 ------ Map functions ------
 -- map[chunkID][rowID] = "256 char string"
 -- map storage format:
@@ -271,16 +284,19 @@ local function loadMap(path)
     if i%256==0 then
       genProgress(i+END, 65536, "Reading Heightmap", title)
     end
+
     heightmap[i] = handle:read(1):byte()
   end
 
-  local nchunk = handle:read(1):byte()
+  local nchunk = handle:read(1):byte() + 1
 
   map = {}
   for ri=1, nchunk do
+    ensureTimeSafety()
     if ri%8==0 then
-      genProgress(ri+129, 256, "Loading Chunks", title)
+      genProgress(ri, 256, "Loading Chunks", title)
     end
+
     local rawid = handle:read(1)
     if not rawid then break end
 
@@ -307,7 +323,7 @@ end
 local function saveMap(path)
   local handle = assert(io.open(path, "wb"))
   handle:write(HEADER ..
-    string.pack("<I1i2I8", VERSION, player.x, player.y, seed))
+    string.pack("<I1i2I1I8", VERSION, player.x, player.y, seed))
 
   local title = "Saving " .. path
 
@@ -319,7 +335,18 @@ local function saveMap(path)
     handle:write(string.char(heightmap[i]))
   end
 
+  local nchunk = -1
   for id=-128, 127 do
+    if map[id] then
+      nchunk = nchunk + 1
+    end
+  end
+
+  handle:write(string.char(nchunk))
+
+  for id=-128, 127 do
+    ensureTimeSafety()
+
     if id%8==0 then
       genProgress(id+129, 256, "Saving Chunks", title)
     end
@@ -455,7 +482,7 @@ local function updateLightMap(xe, ye, xr, yr)
   local cache = {}
 
   -- find torches
-  for y=math.max(1, YBASE - YRADIUS), math.min(256, YBASE + YRADIUS) do
+  for y=math.max(1, YBASE - YRADIUS), 256 do
     sources[y] = {}
     local blockstrip = getBlockStrip(y, XBASE - RADIUS, XBASE + RADIUS)
     cache[y] = blockstrip
@@ -468,7 +495,7 @@ local function updateLightMap(xe, ye, xr, yr)
 
   -- find skylight
   for x=1, RADIUS + RADIUS + 1 do
-    for y=math.min(256, YBASE + YRADIUS), math.max(1, YBASE - YRADIUS), -1 do
+    for y=256, math.max(1, YBASE - YRADIUS), -1 do
       local id = cache[y]:byte(x)
       if not blocks[id].transparent then
         break
@@ -567,9 +594,12 @@ local function genHeightmap(hm, minY, maxY)
 end
 
 local function populateChunk(id)
+  ensureTimeSafety()
+
   if id % 8 == 0 then
     genProgress(id+129, 256, "Populating Chunks", "Generating World")
   end
+
   local air = string.char(getBlockIDByName("air"))
   local bedrock = string.char(getBlockIDByName("bedrock"))
   local stone = string.char(getBlockIDByName("stone"))
@@ -601,9 +631,12 @@ local function populateChunk(id)
 end
 
 local function populateCaves(id)
+  ensureTimeSafety()
+
   if id % 8 == 0 then
     genProgress(id+129, 256, "Carving Caves", "Generating World")
   end
+
   local ncave = math.random(1, 40)
   local offset = id * 256
 
@@ -639,6 +672,8 @@ local function populateCaves(id)
 end
 
 local function placeOres(id)
+  ensureTimeSafety()
+
   if id % 8 == 0 then
     genProgress(id+129, 256, "Placing Ores", "Generating World")
   end
@@ -810,6 +845,7 @@ local function draw()
         print(#block, #light)
       end
       term.blit(block, light, light)
+
     else
       term.setCursorPos(1, h - (y - player.y + halfH))
       local col = string.format("%x", math.max(0, y + 12))
@@ -818,9 +854,27 @@ local function draw()
   end
 
   term.setCursorPos(halfW + 1, halfH + 1)
-  term.blit("\xFE", "F", "F")
+  local lightTop, lightBot = getStrip(lightmap, player.y + 1, player.x,
+    player.x), getStrip(lightmap, player.y, player.x, player.x)
+  term.blit("\xFE", lightTop, "F")
   term.setCursorPos(halfW + 1, halfH)
-  term.blit("\xFD", "F", "F")
+  term.blit("\xFD", lightBot, "F")
+
+  -- [=[
+  for i=1, #player.inventory do
+    term.setCursorPos(1, i)
+    local slot = player.inventory[i]
+
+    win.blit(string.char(slot[1]+0x60), "F", "F")
+
+    if player.selected == i then
+      term.setBackgroundColor(2^15)
+    else
+      term.setBackgroundColor(2^10)
+    end
+
+    term.write((" "..blocks[slot[1]].name.." x"..slot[2]):gsub(".", offsetChar))
+  end--]=]
 
   term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
   term.setCursorBlink(true)
@@ -995,8 +1049,42 @@ local function beginGame(mapName)
         player.look.x = math.max(-3, player.look.x - 1)
 
       elseif evt[2] == keys.r then
-        setBlock(player.x + player.look.x + 1,
-          player.y + player.look.y + 1, "air")
+        local bx, by = player.x + player.look.x + 1,
+          player.y + player.look.y + 1
+        local bid = getBlock(bx - 1, by)
+
+        if bid > 0 then
+          for i=1, #player.inventory, 1 do
+            local slot = player.inventory[i]
+
+            if slot[1] == bid then
+              slot[2] = slot[2] + 1
+              break
+            end
+
+            if i == #player.inventory then
+              player.inventory[#player.inventory+1] = {bid, 1}
+            end
+          end
+        end
+
+        setBlock(bx, by, "air")
+        updateLightMap()
+
+      elseif evt[2] == keys.f then
+        local bx, by = player.x + player.look.x + 1,
+          player.y + player.look.y + 1
+
+        if getBlock(bx - 1, by) == 0 then
+          local slot = player.inventory[player.selected]
+          slot[2] = slot[2] - 1
+          setBlock(bx, by, blocks[slot[1]].name)
+          if slot[2] == 0 then
+            table.remove(player.inventory, player.selected)
+            player.selected = math.max(#player.inventory, player.selected)
+          end
+        end
+
         updateLightMap()
 
       elseif evt[2] == keys.q then
@@ -1014,6 +1102,14 @@ local function beginGame(mapName)
         menu(options, "Paused")
         if quit then
           break
+        end
+      end
+
+    elseif evt[1] == "char" then
+      if tonumber(evt[2]) then
+        local n = tonumber(evt[2])
+        if player.inventory[n] then
+          player.selected = n
         end
       end
 
