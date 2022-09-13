@@ -228,8 +228,11 @@ local function genProgress(id, from, msg, title)
 
   if title then drawTitle(title) end
 
+  term.setCursorPos(1, 4)
   win.setVisible(true)
   term.redirect(oldTerm)
+
+  term.setCursorPos(1, 4)
 end
 
 local lastYield = epoch("utc")
@@ -304,16 +307,20 @@ local function loadMap(path)
     map[id] = {}
 
     for i=1, 256 do
-      local row = ""
-      local length = 0
+      local row = {}
 
       repeat
         local count = (handle:read(1) or ""):byte()
         if not count then break end
         local tile = handle:read(1):byte()
-        row = row .. string.char(tile):rep(count + 1)
-        length = length + count + 1
-      until length >= 256
+        for _=1, count + 1 do
+          row[#row+1] = tile
+        end
+      until #row >= 256
+
+      if #row ~= 256 then
+        error(id .. ',' .. i .. ',' .. #row)
+      end
 
       map[id][i] = row
     end
@@ -358,16 +365,16 @@ local function saveMap(path)
         local row = map[id][r]
 
         while #row > 0 do
-          local char = row:sub(1, 1)
+          local char = row[1]
           local i = 1
 
-          while row:sub(i, i) == char do
+          while row[i] == char do
             i = i + 1
           end
 
-          local tiles = row:sub(1, i-1)
-          row = row:sub(i)
-          handle:write(string.pack("BB", #tiles - 1, char:byte()))
+          row = {table.unpack(row, i)}
+
+          handle:write(string.pack("BB", i-2, char))
         end
       end
     end
@@ -380,41 +387,60 @@ local function getStrip(t, y, x1, x2)
   local chunk1, chunk2 = math.ceil(x1 / 256), math.ceil(x2 / 256)
   local offset1, offset2 = x1 - (chunk1 * 256) - 1, x2 - (chunk2 * 256) - 1
 
-  if chunk1 == chunk2 then
-    return t[chunk1][y]:sub(offset1, offset2)
+  if offset1 < 0 then
+    offset1 = 256 + offset1
+  end
 
-  else
-    local diff = chunk2 - chunk1
-    local begin, _end =
-      t[chunk1][y]:sub(offset1),
-      t[chunk2][y]:sub(1, offset2)
+  if offset2 < 0 then
+    offset2 = 256 + offset2
+  end
 
-    local middle = ""
+  local strip = {}
 
-    if diff > 1 then
-      for i=chunk1+1, chunk2-1 do
-        middle = middle .. t[i][y]
+  local diff = chunk2 - chunk1
+  for i=offset1, 256 do
+    strip[#strip+1] = t[chunk1][y][i]
+  end
+
+  if diff > 1 then
+    for i=chunk1+1, chunk2-1 do
+      for j=1, 256 do
+        strip[#strip+1] = t[i][y][j]
       end
     end
-
-    return begin .. middle .. _end
   end
+
+  for i=1, 256 + offset2 do
+    strip[#strip+1] = t[chunk2][y][i]
+  end
+
+  return strip
 end
 
 local function setItem(t, x, y, thing)
   x = x - 1
   if x < BEGIN or x > END-256 then return end
   if y < 2 or y > 256 then return end
+
   local chunk = math.ceil(x / 256)
   local diff = x - (chunk * 256)
   local layer = t[chunk][y]
+
+  if diff < 0 then diff = diff + 256 end
+
+  layer[diff] = thing
+--[[
   if diff == -256 then
-    t[chunk][y] = thing .. layer:sub(2)
+    layer[1] = thing
+--    t[chunk][y] = thing .. layer:sub(2)
   elseif diff == 0 then
-    t[chunk][y] = layer:sub(0, diff - 2) .. thing
+    layer[#layer] = thing
+--    t[chunk][y] = layer:sub(0, diff - 2) .. thing
   else
-    t[chunk][y] = (layer:sub(0, diff - 2) .. thing .. layer:sub(diff))
-  end
+    layer[diff-1] = thing
+--    t[chunk][y] = (layer:sub(0, diff - 2) .. thing .. layer:sub(diff))
+  end--]]
+
   if #t[chunk][y] ~= 256 then
     error(diff)
   end
@@ -425,7 +451,7 @@ local function getBlockStrip(y, x1, x2)
 end
 
 local function getBlock(x, y)
-  return getStrip(map, y, x, x):byte()
+  return getStrip(map, y, x, x)[1]
 end
 
 local function getBlockInfo(x, y)
@@ -433,7 +459,7 @@ local function getBlockInfo(x, y)
 end
 
 local function setBlock(x, y, id)
-  return setItem(map, x, y, string.char(getBlockIDByName(id)))
+  return setItem(map, x, y, getBlockIDByName(id))
 end
 
 ------ Lighting ------
@@ -445,10 +471,15 @@ local function getLightStrip(y, x1, x2)
 end
 
 local function initializeLightMap()
-  for chunk=-128, 127, 1 do
+  for chunk=-128, 127 do
     lightmap[chunk] = lightmap[chunk] or {}
-    for y=1, 256, 1 do
-      lightmap[chunk][y] = ("f"):rep(256)
+    for y=1, 256 do
+      local row = {}
+      for x=1, 256 do
+        row[x] = "f"
+      end
+
+      lightmap[chunk][y] = row
     end
   end
 end
@@ -472,7 +503,7 @@ local function updateLightMap(xe, ye, xr, yr)
     XBASE, YBASE, RADIUS, YRADIUS = xe, ye, xr, yr
   end
 
-  local torch = string.char(getBlockIDByName("torch"))
+  local torch = getBlockIDByName("torch")
   local sources = {}
   local cache = {}
 
@@ -481,19 +512,21 @@ local function updateLightMap(xe, ye, xr, yr)
     sources[y] = {}
     local blockstrip = getBlockStrip(y, XBASE - RADIUS, XBASE + RADIUS)
     cache[y] = blockstrip
-    for pos in blockstrip:gmatch("()("..torch..")") do
-      sources[y][XBASE - RADIUS + pos] = {XBASE - RADIUS + pos, y}
+    for i=1, #blockstrip do
+      if blockstrip[i] == torch then
+        sources[y][XBASE - RADIUS + i - 1] = {XBASE - RADIUS + i - 1, y}
+      end
     end
   end
 
   -- find skylight
   for x=1, RADIUS + RADIUS + 1 do
     for y=256, math.max(1, YBASE - YRADIUS), -1 do
-      local id = cache[y]:byte(x)
+      local id = cache[y][x]
       if not blocks[id].transparent then
         break
       else
-        sources[y][XBASE - RADIUS + x] = {XBASE - RADIUS + x, y}
+        sources[y][XBASE - RADIUS + x - 1] = {XBASE - RADIUS + x - 1, y}
       end
     end
   end
@@ -593,34 +626,40 @@ local function populateChunk(id)
     genProgress(id+129, 256, "Populating Chunks", "Generating World")
   end
 
-  local air = string.char(getBlockIDByName("air"))
-  local bedrock = string.char(getBlockIDByName("bedrock"))
-  local stone = string.char(getBlockIDByName("stone"))
-  local dirt = string.char(getBlockIDByName("dirt"))
-  local grass = string.char(getBlockIDByName("grass"))
+  local air = getBlockIDByName("air")
+  local bedrock = getBlockIDByName("bedrock")
+  local stone = getBlockIDByName("stone")
+  local dirt = getBlockIDByName("dirt")
+  local grass = getBlockIDByName("grass")
 
   local offset = id * 256
   local DIRT_DEPTH = 5
+
+  for i=1, 256 do
+    map[id][i] = {}
+  end
 
   for col=1, 256 do
     local height = heightmap[offset + col]
 
     for i=1, height - DIRT_DEPTH do
-      map[id][i] = (map[id][i] or "") .. stone
+      map[id][i][col] = stone
     end
 
     for i=height - (DIRT_DEPTH - 1), height - 1 do
-      map[id][i] = (map[id][i] or "") .. dirt
+      map[id][i][col] = dirt
     end
 
-    map[id][height] = (map[id][height] or "") .. grass
+    map[id][height][col] = grass
 
     for i=height+1, 256, 1 do
-      map[id][i] = (map[id][i] or "") .. air
+      map[id][i][col] = air
     end
   end
 
-  map[id][1] = bedrock:rep(256)
+  for i=1, 256 do
+    map[id][1][i] = bedrock
+  end
 end
 
 local function populateCaves(id)
@@ -671,7 +710,7 @@ local function placeOres(id)
     genProgress(id+129, 256, "Placing Ores", "Generating World")
   end
 
-  local stone = string.char(getBlockIDByName("stone"))
+  local stone = getBlockIDByName("stone")
 
   local info = {
     coal = {
@@ -684,7 +723,7 @@ local function placeOres(id)
       -- rate% of stone is replaced with this ore at the optimum level
       rate = 1,
       -- the tile
-      tile = string.char(getBlockIDByName("coal_ore"))
+      tile = getBlockIDByName("coal_ore")
   },
 
     iron = {
@@ -692,7 +731,7 @@ local function placeOres(id)
       min = 32,
       optimum = 60,
       rate = 0.5,
-      tile = string.char(getBlockIDByName("iron_ore"))
+      tile = getBlockIDByName("iron_ore")
     },
 
     diamond = {
@@ -700,7 +739,7 @@ local function placeOres(id)
       min = 2,
       optimum = 11,
       rate = 0.2,
-      tile = string.char(getBlockIDByName("diamond_ore"))
+      tile = getBlockIDByName("diamond_ore")
     },
 
     redstone = {
@@ -708,7 +747,7 @@ local function placeOres(id)
       min = 2,
       optimum = 14,
       rate = 0.4,
-      tile = string.char(getBlockIDByName("redstone_ore"))
+      tile = getBlockIDByName("redstone_ore")
     },
 
     gold = {
@@ -716,7 +755,7 @@ local function placeOres(id)
       min = 4,
       optimum = 25,
       rate = 0.3,
-      tile = string.char(getBlockIDByName("gold_ore"))
+      tile = getBlockIDByName("gold_ore")
     }
   }
 
@@ -744,15 +783,13 @@ local function placeOres(id)
           chance = chance * 10
         until math.floor(chance) == chance or multiplier > 10000
 
-        layer = layer:gsub(stone, function()
-          if math.random(1, multiplier) <= chance then
-            return v.tile
-          else
-            return stone
+        for i=1, #layer do
+          if layer[i] == stone then
+            if math.random(1, multiplier) <= chance then
+              layer[i] = v.tile
+            end
           end
-        end)
-
-        map[id][y] = layer
+        end
       end
     end
   end
@@ -826,12 +863,15 @@ local function draw()
 
   for y = player.y - halfH, player.y + halfH, 1 do
     if y > 0 and y <= 256 then
-      local block = getBlockStrip(y, player.x - halfW, player.x + halfW)
-      local light = getLightStrip(y, player.x - halfW, player.x + halfW)
+      local _block = getBlockStrip(y, player.x - halfW, player.x + halfW)
+      local light = table.concat(
+        getLightStrip(y, player.x - halfW, player.x + halfW))
 
-      block = block:gsub(".", function(c)
-        return string.char(blocks[string.byte(c)].tex)
-      end)
+      local block = ""
+
+      for i=1, #_block do
+        block = block .. string.char(blocks[_block[i]].tex)
+      end
 
       term.setCursorPos(1, h - (y - player.y + halfH))
       if #block ~= #light then
@@ -849,9 +889,9 @@ local function draw()
   term.setCursorPos(halfW + 1, halfH + 1)
   local lightTop, lightBot = getStrip(lightmap, player.y + 1, player.x,
     player.x), getStrip(lightmap, player.y, player.x, player.x)
-  term.blit("\xFE", lightTop, "F")
+  term.blit("\xFE", lightTop[1], "F")
   term.setCursorPos(halfW + 1, halfH)
-  term.blit("\xFD", lightBot, "F")
+  term.blit("\xFD", lightBot[1], "F")
 
   -- [=[
   for i=1, #player.inventory do
@@ -1042,9 +1082,9 @@ local function beginGame(mapName)
         player.look.x = math.max(-3, player.look.x - 1)
 
       elseif evt[2] == keys.r then
-        local bx, by = player.x + player.look.x + 1,
+        local bx, by = player.x + player.look.x,
           player.y + player.look.y + 1
-        local bid = getBlock(bx - 1, by)
+        local bid = getBlock(bx, by)
 
         if bid > 0 then
           for i=1, #player.inventory, 1 do
@@ -1065,10 +1105,10 @@ local function beginGame(mapName)
         updateLightMap()
 
       elseif evt[2] == keys.f then
-        local bx, by = player.x + player.look.x + 1,
+        local bx, by = player.x + player.look.x,
           player.y + player.look.y + 1
 
-        if getBlock(bx - 1, by) == 0 then
+        if getBlock(bx, by) == 0 then
           local slot = player.inventory[player.selected]
           slot[2] = slot[2] - 1
           setBlock(bx, by, blocks[slot[1]].name)
@@ -1222,9 +1262,7 @@ local mainMenu = {
         end
       }
 
-      local result = table.pack(pcall(menu, options, "Select World"))
-      term.setCursorPos(1, 5)
-      assert(table.unpack(result))
+      menu(options, "Select World")
     end
   end},
 

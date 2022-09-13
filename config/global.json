@@ -34,7 +34,7 @@
     "initialComputer": 0,
     "jit_ffi_enable": false,
     "keepOpenOnShutdown": false,
-    "lastVersion": "v2.7.1-luajit",
+    "lastVersion": "v2.7.1",
     "logErrors": false,
     "maxNotesPerTick": 8,
     "maxOpenPorts": 128,
