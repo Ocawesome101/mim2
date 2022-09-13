@@ -458,11 +458,6 @@ for i=0, 15 do
   levels[i] = string.format("%x", i)
 end
 
-local __something = 0
-local function sfind(s, b)
-  return s:find(b, __something)
-end
-
 local function updateLightMap(xe, ye, xr, yr)
   if NO_LIGHT then return end
 
@@ -486,10 +481,8 @@ local function updateLightMap(xe, ye, xr, yr)
     sources[y] = {}
     local blockstrip = getBlockStrip(y, XBASE - RADIUS, XBASE + RADIUS)
     cache[y] = blockstrip
-    __something = 0
-    for _torch in sfind, blockstrip, torch do
-      __something = __something + _torch
-      sources[y][XBASE - RADIUS + _torch] = {XBASE - RADIUS + _torch, y}
+    for pos in blockstrip:gmatch("()("..torch..")") do
+      sources[y][XBASE - RADIUS + pos] = {XBASE - RADIUS + pos, y}
     end
   end
 
