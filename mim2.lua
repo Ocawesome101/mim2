@@ -158,12 +158,21 @@ local player = {
   look = {
     x = 2, y = 0,
   },
-  selected = 1,
   -- first 9 slots are hotbar
-  inventory = {
-    [1] = {getBlockIDByName("torch"), 64}
-  }
+  inventory = { },
 }
+local inventoryOpen = false
+local crafting = { }
+
+for i=1, 36 do
+  player.inventory[i] = {0, 0}
+end
+
+for i=1, 5 do
+  crafting[i] = {0, 0}
+end
+
+------ GUIs n stuff ------
 
 local function offsetChar(c)
   return string.char(math.max(0, c:byte() - 32))
@@ -233,6 +242,82 @@ local function genProgress(id, from, msg, title)
   term.redirect(oldTerm)
 
   term.setCursorPos(1, 4)
+end
+
+local inv = {
+  up = '\xF0',
+  side = '\xF1',
+  cross = '\xF2',
+  topLeft = '\xF3',
+  bottomLeft = '\xF4',
+  topRight = '\xF5',
+  bottomRight = '\xF6',
+  crossDown = '\xF7',
+  crossUp = '\xF8',
+  crossLeft = '\xF9',
+  crossRight = '\xFA',
+  empty = '\xFB'
+}
+
+local function drawInventory(x, y, slots, limit, width, begin, selected)
+  local positions = {}
+
+  local count = math.min(#slots, limit)
+  width = width or 9
+
+  local rows = math.ceil(count / width)
+
+  local bg = string.rep("f", width*3)
+  --local bg = string.rep("f", width*2 + 1)
+  local fg1 = (inv.topLeft .. inv.side .. inv.topRight):rep(width)
+  local fg2 = (inv.up .. inv.empty .. inv.up):rep(width)
+  local fg3 = (inv.bottomLeft .. inv.side .. inv.bottomRight):rep(width)
+  local middle = (inv.crossRight .. inv.side .. inv.crossLeft):rep(width)
+  --local fg1 = inv.topLeft .. (inv.side .. inv.crossDown):rep(width-1)
+  --  .. inv.side .. inv.topRight
+  --local fg2 = inv.up .. (inv.empty .. inv.up):rep(width)
+  --local fg3 = inv.bottomLeft .. (inv.side .. inv.crossUp):rep(width-1)
+  --  .. inv.side .. inv.bottomRight
+  --local middle = inv.crossRight .. (inv.side .. inv.cross):rep(width-1)
+  --  .. inv.side .. inv.crossLeft
+
+  for i=1, rows do
+    term.setCursorPos(x, y+i*2-2)
+    term.blit(i == 1 and fg1 or middle, bg, bg)
+    term.setCursorPos(x, y+i*2-1)
+    term.blit(fg2, bg, bg)
+    term.setCursorPos(x, y+i*2)
+    term.blit(fg3, bg, bg)
+  end
+
+  for i=1, rows do
+    local baseIndex = (i-1) * 9
+
+    for n=1, 9 do
+      local index = baseIndex + n + begin
+      local slot = slots[index]
+
+      if index > count or not slot then break end
+
+      if slot then
+        local px, py = x + n*3 - 2, y + i*2 - 1
+
+        if slot[1] > 0 then
+          term.setCursorPos(px, py)
+          term.blit(string.char(blocks[slot[1]].tex), "f", "f")
+          term.setCursorPos(px, py+1)
+          local cn = tostring(slot[2])
+          local cfg = (index == selected and "f" or "3"):rep(#cn)
+          local cbg = ("9"):rep(#cn)
+          term.blit(cn:gsub(".", offsetChar), cfg, cbg)
+        end
+
+        positions[baseIndex + n] = {px, py}
+      end
+    end
+  end
+
+  return positions
 end
 
 local lastYield = epoch("utc")
@@ -839,7 +924,7 @@ local function tryMove()
 end
 
 ------ Graphics ------
-local function draw()
+local function draw(selected)
   win.reposition(1, 1, oldTerm.getSize())
   term.redirect(win)
 
@@ -882,27 +967,38 @@ local function draw()
   term.setCursorPos(halfW + 1, halfH)
   term.blit("\xFD", lightBot[1], "F")
 
-  for i=1, #player.inventory do
-    term.setCursorPos(1, i)
-    local slot = player.inventory[i]
+  term.setCursorPos(1, 1)
+  term.write((("(%d,%d)"):format(player.x, player.y):gsub(".", offsetChar)))
 
-    win.blit(string.char(slot[1]+0x60), "F", "F")
+  local invPos = {}
 
-    if player.selected == i then
-      term.setBackgroundColor(2^15)
-    else
-      term.setBackgroundColor(2^10)
-    end
+  invPos[1] = drawInventory(math.floor(w/2-13), h - 3, player.inventory, 9,
+    9, 0, selected[1] or 0)
 
-    term.write((" x"..slot[2]):gsub(".", offsetChar))
+  if inventoryOpen then
+    invPos[2] = drawInventory(
+      math.floor(w/2-13), math.floor(h/2), player.inventory, 27,
+      9, 9, selected[2] or 0)
+
+    invPos[3] = drawInventory(
+      math.floor(w/2-2), math.floor(h/2-5), crafting, 4, 2, 0,
+      selected[3] or 0)
+      --player.selectedInventory - 27)
+
+    invPos[4] = drawInventory(
+      math.floor(w/2+5), math.floor(h/2-4), crafting, 1, 1, 4,
+      selected[4] or 0)
+      --player.selectedInventory - 31)
+
+  else
+    term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
+    term.setCursorBlink(true)
   end
 
-  term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
-  term.setCursorBlink(true)
-
   win.setVisible(true)
-
   term.redirect(oldTerm)
+
+  return invPos
 end
 
 local oldPalette = {}
@@ -1009,6 +1105,37 @@ local function menu(opts, title)
   end
 end
 
+local function getInventoryOffset(id, slot)
+  if id == 1 then
+    return player.inventory, slot
+
+  elseif id == 2 then
+    return player.inventory, 9 + slot
+
+  elseif id == 3 then
+    return crafting, slot
+
+  elseif id == 4 then
+    return crafting, 5
+  end
+end
+
+-- Move item stack from inventoryA (ia) slotA (sa) to
+-- inventoryB (ib) slotB (sb)
+local function moveStackFrom(ia, sa, ib, sb)
+  local isrc, soffset = getInventoryOffset(ia, sa)
+  local idest, doffset = getInventoryOffset(ib, sb)
+
+  if ib == 4 then -- can't move TO crafting dest, only FROM
+    return
+  end
+
+  -- ditto
+  if ia == 4 and idest[doffset][1] > 0 then return end
+
+  -- swap the slots!
+  isrc[soffset], idest[doffset] = idest[doffset], isrc[soffset]
+end
 
 local function beginGame(mapName)
   if fs.exists(mapName) then
@@ -1028,6 +1155,11 @@ local function beginGame(mapName)
   initializeLightMap()
   updateLightMap()
 
+  local invPos = {}
+  local selected = {1}
+  local oldHotbar = 1
+
+  -- Main game loop
   while true do
     local evt = table.pack(pullEvent())
 
@@ -1075,16 +1207,27 @@ local function beginGame(mapName)
         local bid = getBlock(bx, by)
 
         if bid > 0 then
+          local done = false
+
           for i=1, #player.inventory, 1 do
             local slot = player.inventory[i]
 
-            if slot[1] == bid then
+            if slot[1] == bid and slot[2] < 64 then
               slot[2] = slot[2] + 1
+              done = true
               break
             end
+          end
 
-            if i == #player.inventory then
-              player.inventory[#player.inventory+1] = {bid, 1}
+          if not done then
+            for i=1, #player.inventory, 1 do
+              local slot = player.inventory[i]
+
+              if slot[1] == 0 then
+                slot[1] = bid
+                slot[2] = 1
+                break
+              end
             end
           end
         end
@@ -1097,16 +1240,27 @@ local function beginGame(mapName)
           player.y + player.look.y + 1
 
         if getBlock(bx, by) == 0 then
-          local slot = player.inventory[player.selected]
-          slot[2] = slot[2] - 1
-          setBlock(bx, by, blocks[slot[1]].name)
-          if slot[2] == 0 then
-            table.remove(player.inventory, player.selected)
-            player.selected = math.max(#player.inventory, player.selected)
+          local slot = player.inventory[selected[1] or 0]
+          if slot and slot[2] > 0 then
+            slot[2] = slot[2] - 1
+            setBlock(bx, by, blocks[slot[1]].name)
+
+            if slot[2] == 0 then
+              slot[1] = 0
+            end
           end
         end
 
         updateLightMap()
+
+      elseif evt[2] == keys.e then
+        inventoryOpen = not inventoryOpen
+        if inventoryOpen then
+          oldHotbar = selected[1]
+          selected[1] = 0
+        else
+          selected[1] = oldHotbar
+        end
 
       elseif evt[2] == keys.q then
         local quit = false
@@ -1126,11 +1280,39 @@ local function beginGame(mapName)
         end
       end
 
+    elseif evt[1] == "mouse_click" then
+      local x, y = evt[3], evt[4]
+
+      if inventoryOpen then
+        for i=1, #invPos do
+          local pos = invPos[i]
+
+          for n=1, #pos do
+            if x == pos[n][1] and y == pos[n][2] then
+              if selected[i] and selected[i] > 0 then
+                moveStackFrom(i, selected[i], i, n)
+                selected[i] = 0
+
+              else
+                selected[i] = n
+
+                for k=1, #invPos do
+                  if k ~= i and selected[k] and selected[k] > 0 then
+                    moveStackFrom(k, selected[k], i, n)
+                    selected[i] = 0
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+
     elseif evt[1] == "char" then
       if tonumber(evt[2]) then
         local n = tonumber(evt[2])
         if player.inventory[n] then
-          player.selected = n
+          selected[1] = n
         end
       end
 
@@ -1141,7 +1323,7 @@ local function beginGame(mapName)
     end
 
     if epoch("utc") - lastUpdate >= 1000*TICK_TIME then
-      draw()
+      invPos = draw(selected)
       tryMove()
       lastUpdate = epoch("utc")
     end
