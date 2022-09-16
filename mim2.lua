@@ -133,6 +133,22 @@ local blocks = {
     tex = 0x6F,
     physics = p_air,
     transparent = true
+  },
+  {
+    name = "planks",
+    tex = 0x70,
+  },
+  {
+    name = "crafting_table",
+    tex = 0x71
+  },
+  {
+    name = "furnace",
+    tex = 0x72
+  },
+  {
+    name = "furnace_lit",
+    tex = 0x73
   }
 }
 
@@ -339,9 +355,18 @@ end
 -- nchunk (number) -- 1 byte; the number of chunks stored in the file
 -- heightmap -- 256^2 bytes; the heightmap used in world generation
 -- for each chunk:
---    x -- 1 byte; signed chunk ID
+--    x (number) -- 1 byte; signed chunk ID
 --    256x Row
---    each Row is a RLE byte sequence totaling 256 bytes when uncompressed.
+--    for each Row:
+--      RLEBlockSpec until len(row) == 256
+--      for each RLEBlockSpec:
+--        length (number) -- 1 byte; how many times this is repeated
+--        blockid (number) -- 1 byte; the block ID
+--        hasData (number) -- 1 byte; if 0, the following bytes store block data
+--            otherwise this is the length of the next blockspec
+--        if hasData:
+--          length (number) -- 1 byte
+--          data (variable) -- $length bytes
 local map = {}
 local seed = 0
 local heightmap = {}
@@ -470,13 +495,14 @@ end
 
 local function getStrip(t, y, x1, x2)
   local chunk1, chunk2 = math.ceil(x1 / 256), math.ceil(x2 / 256)
-  local offset1, offset2 = x1 - (chunk1 * 256) - 1, x2 - (chunk2 * 256) - 1
+  local offset1, offset2 = x1 % 256, x2 % 256
+  --x1 - (chunk1 * 256) - 1, x2 - (chunk2 * 256) - 1
 
-  if offset1 < 0 then
+  if offset1 < 1 then
     offset1 = 256 + offset1
   end
 
-  if offset2 < 0 then
+  if offset2 < 1 then
     offset2 = 256 + offset2
   end
 
@@ -503,7 +529,6 @@ local function getStrip(t, y, x1, x2)
 end
 
 local function setItem(t, x, y, thing)
-  x = x - 1
   if x < BEGIN or x > END-256 then return end
   if y < 2 or y > 256 then return end
 
@@ -916,6 +941,7 @@ local function tryMove()
   for _=1, math.abs(my) do
     local m = tryMovePartial(0, my/math.abs(my))
     moved = moved or m
+    if not m then player.motion.y = math.max(0, player.motion.y - 1) end
   end
 
   if moved then
@@ -1360,7 +1386,7 @@ local function createMap()
 
   local name
   name, seed = opts[1].text, tonumber(opts[2].text)
-  if not seed then return end
+  if #name == 0 or not seed then return end
   generateMap(maps.."/"..name, caves)
   beginGame(maps.."/"..name)
 end
