@@ -13,6 +13,8 @@ local strings = require("cc.strings")
 local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = 0.1
 local BEGIN, END = 256*-128, 256*128
+local INV_TEXT, INV_SEL, INV_UNSEL = "f", "c", "a"
+local INV_SEL_FG, INV_UNSEL_FG = "f", "c"
 
 local pullEvent, startTimer, epoch, sleep
 if not rawget(os, "pullEvent") then
@@ -287,7 +289,7 @@ local function drawInventory(x, y, slots, limit, width, begin, selected)
 
   local rows = math.ceil(count / width)
 
-  local bg = string.rep("f", width*3)
+  local bg = string.rep(INV_UNSEL, width*3)
   --local bg = string.rep("f", width*2 + 1)
   local fg1 = (inv.topLeft .. inv.side .. inv.topRight):rep(width)
   local fg2 = (inv.up .. inv.empty .. inv.up):rep(width)
@@ -325,12 +327,21 @@ local function drawInventory(x, y, slots, limit, width, begin, selected)
         if slot[1] > 0 then
           term.setCursorPos(px, py)
           local breg = blocks[slot[1]]
-          term.blit(string.char(breg.inv or breg.tex), "f", "f")
+          local sel = index - begin == selected
+          local sbg = sel and INV_SEL or INV_UNSEL
+          local sfg = sel and INV_SEL_FG or INV_UNSEL_FG
+
+          term.blit(string.char(breg.inv or breg.tex), sfg, sbg)
           term.setCursorPos(px, py+1)
+
           local cn = tostring(slot[2])
-          local cfg = (index == selected and "f" or "3"):rep(#cn)
-          local cbg = ("9"):rep(#cn)
+          local cfg = INV_TEXT:rep(#cn)
+          local cbg = INV_UNSEL:rep(#cn)
           term.blit(cn:gsub(".", offsetChar), cfg, cbg)
+
+        elseif index - begin == selected then
+          term.setCursorPos(px, py)
+          term.blit(inv.empty, INV_SEL, INV_UNSEL)
         end
 
         positions[baseIndex + n] = {px, py}
@@ -1035,9 +1046,10 @@ local function draw(selected)
 
   term.setCursorPos(1, 1)
   term.write((("(%d,%d)"):format(player.x, player.y):gsub(".", offsetChar)))
+  --[[
   term.setCursorPos(1, 2)
   term.write((("(%d,%d,%d,%d)"):format(
-    selected[1]or 0,selected[2]or 0,selected[3]or 0,selected[4]or 0):gsub(".", offsetChar)))
+    selected[1]or 0,selected[2]or 0,selected[3]or 0,selected[4]or 0):gsub(".", offsetChar)))]]
 
   local invPos = {}
 
