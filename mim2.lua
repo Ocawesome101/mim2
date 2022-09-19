@@ -85,6 +85,7 @@ local blocks = {
   {
     name = "coal_ore",
     tex = 0x64,
+    inv = 0xE0
   },
   {
     name = "iron_ore",
@@ -132,7 +133,8 @@ local blocks = {
     name = "torch",
     tex = 0x6F,
     physics = p_air,
-    transparent = true
+    transparent = true,
+    inv = 0xE1
   },
   {
     name = "planks",
@@ -183,6 +185,8 @@ local crafting = { }
 for i=1, 36 do
   player.inventory[i] = {0, 0}
 end
+
+player.inventory[1] = { getBlockIDByName("torch"), 64 }
 
 for i=1, 5 do
   crafting[i] = {0, 0}
@@ -307,20 +311,21 @@ local function drawInventory(x, y, slots, limit, width, begin, selected)
   end
 
   for i=1, rows do
-    local baseIndex = (i-1) * 9
+    local baseIndex = (i-1) * width
 
-    for n=1, 9 do
+    for n=1, width do
       local index = baseIndex + n + begin
       local slot = slots[index]
 
-      if index > count or not slot then break end
+      if index > count + begin or not slot then break end
 
       if slot then
         local px, py = x + n*3 - 2, y + i*2 - 1
 
         if slot[1] > 0 then
           term.setCursorPos(px, py)
-          term.blit(string.char(blocks[slot[1]].tex), "f", "f")
+          local breg = blocks[slot[1]]
+          term.blit(string.char(breg.inv or breg.tex), "f", "f")
           term.setCursorPos(px, py+1)
           local cn = tostring(slot[2])
           local cfg = (index == selected and "f" or "3"):rep(#cn)
@@ -761,6 +766,41 @@ local function populateChunk(id)
   end
 end
 
+local function placeTrees(id)
+  local air = getBlockIDByName("air")
+  local log = getBlockIDByName("log")
+  local leaves = getBlockIDByName("leaves")
+
+  local TREE_HEIGHT = 5
+  local offset = id * 256
+
+  for col=1, 256 do
+    local height = heightmap[offset + col]
+
+    -- trees!
+    if col > 2 and col < 254 and math.random(1, 100) == 32
+        and map[id][height][col] ~= air then
+      local base = height+1
+
+      for i=base, base + TREE_HEIGHT do
+        map[id][i][col] = log
+      end
+
+      map[id][base + TREE_HEIGHT][col] = leaves
+
+      for i=base + TREE_HEIGHT - 3, base + TREE_HEIGHT do
+        map[id][i][col-1] = leaves
+        map[id][i][col+1] = leaves
+      end
+
+      for i=base + TREE_HEIGHT - 3, base + TREE_HEIGHT - 2 do
+        map[id][i][col-2] = leaves
+        map[id][i][col+2] = leaves
+      end
+    end
+  end
+end
+
 local function populateCaves(id)
   ensureTimeSafety()
 
@@ -995,6 +1035,9 @@ local function draw(selected)
 
   term.setCursorPos(1, 1)
   term.write((("(%d,%d)"):format(player.x, player.y):gsub(".", offsetChar)))
+  term.setCursorPos(1, 2)
+  term.write((("(%d,%d,%d,%d)"):format(
+    selected[1]or 0,selected[2]or 0,selected[3]or 0,selected[4]or 0):gsub(".", offsetChar)))
 
   local invPos = {}
 
@@ -1053,6 +1096,10 @@ local function generateMap(mapName, caves)
     for i=-128, 127 do
       populateCaves(i)
     end
+  end
+
+  for i=-128, 127 do
+    placeTrees(i)
   end
 
   player.y = heightmap[player.x] + 50
@@ -1152,7 +1199,8 @@ local function moveStackFrom(ia, sa, ib, sb)
   local isrc, soffset = getInventoryOffset(ia, sa)
   local idest, doffset = getInventoryOffset(ib, sb)
 
-  if ib == 4 then -- can't move TO crafting dest, only FROM
+  -- can't move TO crafting output, only FROM
+  if ib == 4 then
     return
   end
 
@@ -1232,7 +1280,7 @@ local function beginGame(mapName)
           player.y + player.look.y + 1
         local bid = getBlock(bx, by)
 
-        if bid > 0 then
+        if bid > 0 and blocks[bid].name ~= "leaves" then
           local done = false
 
           for i=1, #player.inventory, 1 do
@@ -1316,7 +1364,10 @@ local function beginGame(mapName)
           for n=1, #pos do
             if x == pos[n][1] and y == pos[n][2] then
               if selected[i] and selected[i] > 0 then
-                moveStackFrom(i, selected[i], i, n)
+                if n ~= selected[i] then
+                  moveStackFrom(i, selected[i], i, n)
+                end
+
                 selected[i] = 0
 
               else
@@ -1326,6 +1377,7 @@ local function beginGame(mapName)
                   if k ~= i and selected[k] and selected[k] > 0 then
                     moveStackFrom(k, selected[k], i, n)
                     selected[i] = 0
+                    selected[k] = 0
                   end
                 end
               end
