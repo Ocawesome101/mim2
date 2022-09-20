@@ -179,10 +179,11 @@ local player = {
     x = 2, y = 0,
   },
   -- first 9 slots are hotbar
-  inventory = { },
+  inventory = {},
 }
 local inventoryOpen = false
-local crafting = { }
+local crafting = {}
+--local craftingTable = {}
 
 for i=1, 36 do
   player.inventory[i] = {0, 0}
@@ -192,6 +193,160 @@ player.inventory[1] = { getBlockIDByName("torch"), 64 }
 
 for i=1, 5 do
   crafting[i] = {0, 0}
+end
+
+--[[
+for i=1, 10 do
+  craftingTable[i] = {0, 0}
+end]]
+
+------ Crafting Mechanics ------
+
+local recipes = {
+  {
+    shaped = false,
+    input = {
+      { "log" }
+    },
+    output = { name = "planks", count = 4 }
+  },
+  {
+    shaped = true,
+    defs = {
+      p = "planks"
+    },
+    input = {
+      { "p", "p" },
+      { "p", "p" }
+    },
+    output = { name = "crafting_table", count = 1 }
+  }
+}
+
+local function names(...)
+  local res = {}
+  local i = 0
+  for _, slot in ipairs({...}) do
+    i = i + 1
+    if slot[1] > 0 then
+      res[i] = blocks[slot[1]].name
+    else
+      res[i] = nil
+    end
+  end
+  return res
+end
+
+local function xor(a, b)
+  return (a or b) and not (a and b)
+end
+
+-- spat: source pattern (crafting grid)
+-- cpat: check pattern (recipe)
+-- tlx: top left x
+-- tly: top left y
+local function checkPattern(spat, cpat, tlx, tly)
+  local notAir = false
+
+  for y=tly, 3 - tly do
+    if xor(spat[y], cpat[y]) then return end
+    local srow, crow = spat[y], cpat[y]
+
+    if srow then
+      for x=tlx, 3 - tlx do
+        if xor(srow[x], crow[x]) then return end
+        if srow[x] ~= crow[x] then return end
+        if srow[x] and srow[x] ~= "air" then notAir = true end
+      end
+    end
+  end
+
+  return notAir
+end
+
+local function checkRecipe(grid)
+  local pattern
+  local present = {}
+  if #grid >= 9 then
+    pattern = {
+      names( grid[1], grid[2], grid[3] ),
+      names( grid[4], grid[5], grid[6] ),
+      names( grid[7], grid[8], grid[9] )
+    }
+
+  elseif #grid >= 4 then
+    pattern = {
+      names( grid[1], grid[2] ),
+      names( grid[3], grid[4] )
+    }
+  end
+
+  for i=1, #grid >= 9 and 9 or 4 do
+    if grid[i][1] > 0 then
+      present[#present+1] = blocks[grid[i][1]].name
+    end
+  end
+
+  for i=1, #recipes do
+    local recipe = recipes[i]
+    local rpresent = {}
+    local rpat = { {}, {}, {} }
+    local out = {
+      getBlockIDByName(recipe.output.name),
+      recipe.output.count
+    }
+
+    for n=1, #recipe.input do
+      local row = recipe.input[n]
+
+      for cid=1, #row do
+        local block = row[cid]
+        if recipe.defs and recipe.defs[block] then
+          block = recipe.defs[block]
+        end
+
+        if getBlockIDByName(block) then
+          rpat[n][cid] = block
+          rpresent[#rpresent+1] = block
+        else
+          term.setCursorPos(1, 3)
+          term.write(block or "unknown error")
+        end
+      end
+    end
+
+    if recipe.shaped then
+      for x=1, 3 do
+        for y=1, 3 do
+          if checkPattern(pattern, rpat, x, y) then
+            return out
+          end
+        end
+      end
+
+    else
+      table.sort(present)
+      table.sort(rpresent)
+
+      term.setCursorPos(1, 2)
+      term.write(("%d,%d,%s"):format(#present,#rpresent,recipe.output.name))
+      if #present == 0 or #present ~= #rpresent then return end
+
+      local match = true
+      for n=1, #present do
+        term.setCursorPos(1, 4)
+        term.write(("%q,%q"):format(present[n], rpresent[n]))
+        if present[n] ~= rpresent[n] then match = false; break end
+      end
+
+      if match then
+        term.setCursorPos(1, 3)
+        term.write(("%s present"):format(recipe.output.name))
+
+        return out
+      end
+    end
+  end
 end
 
 ------ GUIs n stuff ------
@@ -1003,7 +1158,7 @@ end
 ------ Graphics ------
 local function draw(selected)
   win.reposition(1, 1, oldTerm.getSize())
-  term.redirect(win)
+  --term.redirect(win)
 
   win.setVisible(false)
 
@@ -1053,19 +1208,28 @@ local function draw(selected)
 
   local invPos = {}
 
+  -- player hotbar
   invPos[1] = drawInventory(math.floor(w/2-13), h - 3, player.inventory, 9,
     9, 0, selected[1] or 0)
 
   if inventoryOpen then
+    -- main inventory
     invPos[2] = drawInventory(
       math.floor(w/2-13), math.floor(h/2), player.inventory, 27,
       9, 9, selected[2] or 0)
 
+    -- crafting grid
     invPos[3] = drawInventory(
       math.floor(w/2-2), math.floor(h/2-5), crafting, 4, 2, 0,
       selected[3] or 0)
       --player.selectedInventory - 27)
 
+    local stack = checkRecipe(crafting)
+    if stack then
+      crafting[5] = stack
+    end
+
+    -- crafting output
     invPos[4] = drawInventory(
       math.floor(w/2+5), math.floor(h/2-4), crafting, 1, 1, 4,
       selected[4] or 0)
@@ -1076,7 +1240,7 @@ local function draw(selected)
     term.setCursorBlink(true)
   end
 
-  win.setVisible(true)
+  --win.setVisible(true)
   term.redirect(oldTerm)
 
   return invPos
@@ -1219,8 +1383,31 @@ local function moveStackFrom(ia, sa, ib, sb)
   -- ditto
   if ia == 4 and idest[doffset][1] > 0 then return end
 
-  -- swap the slots!
-  isrc[soffset], idest[doffset] = idest[doffset], isrc[soffset]
+  -- combine slots if possible
+  if isrc[soffset][1] == idest[doffset][1] then
+    local s, d = isrc[soffset], idest[doffset]
+    local diff = math.min(s[2], 64 - d[2])
+
+    s[2] = s[2] - diff
+    d[2] = d[2] + diff
+
+    if s[2] == 0 then
+      s[1] = 0
+    end
+
+  else
+    -- otherwise swap the slots!
+    isrc[soffset], idest[doffset] = idest[doffset], isrc[soffset]
+  end
+
+  -- decrement everything in the crafting grid if needed
+  if ia == 4 then
+    for i=1, 4 do
+      local slot = crafting[i]
+      slot[2] = math.max(0, slot[2] - 1)
+      if slot[2] == 0 then slot[1] = 0 end
+    end
+  end
 end
 
 local function beginGame(mapName)
