@@ -12,6 +12,7 @@ local strings = require("cc.strings")
 
 local DEBUG = false
 
+local COORDS = true
 local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = 0.1
 local BEGIN, END = 256*-128, 256*128
@@ -48,10 +49,14 @@ print([[
 Controls:
   WASD - move
      R - remove block
-     F - place block
+     F - place block/open block GUI
      Q - pause/quit
+     E - inventory
+     P - toggle coordinates
 Arrows - move block selection
 1 to 9 - select block slot
+Lclick - select inventory slot/move stack
+Rclick - select inventory slot/move one item
 
 Press Enter to continue.
 ]])
@@ -131,6 +136,7 @@ local blocks = {
   {
     name = "ladder",
     tex = 0x6E,
+    inv = 0xE2,
     physics = p_liquid,
     transparent = true
   },
@@ -156,7 +162,7 @@ local blocks = {
   {
     name = "furnace_lit",
     tex = 0x73
-  }
+  },
 }
 
 local function getBlockIDByName(name)
@@ -233,6 +239,18 @@ local recipes = {
       { "s", "s", "s" }
     },
     output = { name = "furnace", count = 1 }
+  },
+  {
+    shaped = true,
+    defs = {
+      p = "planks"
+    },
+    input = {
+      { "p", nil, "p" },
+      { "p", "p", "p" },
+      { "p", nil, "p" }
+    },
+    output = { name = "ladder", count = 8 }
   }
 }
 
@@ -1153,6 +1171,7 @@ local function tryMovePartial(x, y)
   return moved
 end
 
+local upDown = false
 local function tryMove()
   local moved = false
   local physicsType = getBlockInfo(player.x, player.y - 1).physics
@@ -1160,7 +1179,7 @@ local function tryMove()
   if physicsType == p_air then
     player.motion.y = math.max(-2, player.motion.y - 1)
   elseif physicsType == p_liquid then
-    player.motion.y = math.max(-1, player.motion.y - 1)
+    player.motion.y = math.max(upDown and 1 or -1, player.motion.y - 1)
   elseif physicsType == p_solid then
     player.motion.y = math.max(0, player.motion.y)
   end
@@ -1227,8 +1246,10 @@ local function draw(selected)
   term.setCursorPos(halfW + 1, halfH)
   term.blit("\xFD", lightBot[1], "F")
 
-  term.setCursorPos(1, 1)
-  term.write((("(%d,%d)"):format(player.x, player.y):gsub(".", offsetChar)))
+  if COORDS then
+    term.setCursorPos(1, 1)
+    term.write((("(%d,%d)"):format(player.x, player.y):gsub(".", offsetChar)))
+  end
   --[[
   term.setCursorPos(1, 2)
   term.write((("(%d,%d,%d,%d)"):format(
@@ -1493,6 +1514,7 @@ local function beginGame(mapName)
 
     elseif evt[1] == "key" then
       if evt[2] == keys.w then
+        upDown = true
         local pAbove = getBlockInfo(player.x, player.y + 2).physics
         local pBelow = getBlockInfo(player.x, player.y - 1).physics
 
@@ -1610,6 +1632,9 @@ local function beginGame(mapName)
         if quit then
           break
         end
+
+      elseif evt[2] == keys.p then
+        COORDS = not COORDS
       end
 
     elseif evt[1] == "mouse_click" then
@@ -1657,6 +1682,9 @@ local function beginGame(mapName)
     elseif evt[1] == "key_up" then
       if evt[2] == keys.a or evt[2] == keys.d then
         player.motion.x = 0
+
+      elseif evt[2] == keys.w then
+        upDown = false
       end
     end
 
