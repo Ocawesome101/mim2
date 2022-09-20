@@ -10,6 +10,8 @@ local settings = rawget(_G, "settings") or require("settings")
 local window = rawget(_G, "window") or require("window")
 local strings = require("cc.strings")
 
+local DEBUG = false
+
 local NO_LIGHT = settings.get("mim2.no_lighting")
 local TICK_TIME = 0.1
 local BEGIN, END = 256*-128, 256*128
@@ -59,6 +61,7 @@ do local _ = io.read() end
 -- create these here
 local oldTerm = term.current()
 local win = window.create(oldTerm, 1, 1, oldTerm.getSize())
+local empty = {}
 
 ------ Block registration ------
 
@@ -181,24 +184,22 @@ local player = {
   -- first 9 slots are hotbar
   inventory = {},
 }
-local inventoryOpen = false
+local inventoryOpen, craftingTableOpen = false, false
 local crafting = {}
---local craftingTable = {}
+local craftingTable = {}
 
 for i=1, 36 do
   player.inventory[i] = {0, 0}
 end
 
-player.inventory[1] = { getBlockIDByName("torch"), 64 }
-
 for i=1, 5 do
   crafting[i] = {0, 0}
 end
 
---[[
-for i=1, 10 do
+-- [[
+for i=1, 9 do
   craftingTable[i] = {0, 0}
-end]]
+end--]]
 
 ------ Crafting Mechanics ------
 
@@ -220,6 +221,18 @@ local recipes = {
       { "p", "p" }
     },
     output = { name = "crafting_table", count = 1 }
+  },
+  {
+    shaped = true,
+    defs = {
+      s = "stone",
+    },
+    input = {
+      { "s", "s", "s" },
+      { "s", nil, "s" },
+      { "s", "s", "s" }
+    },
+    output = { name = "furnace", count = 1 }
   }
 }
 
@@ -256,7 +269,7 @@ local function checkPattern(spat, cpat, tlx, tly)
       for x=tlx, 3 - tlx do
         if xor(srow[x], crow[x]) then return end
         if srow[x] ~= crow[x] then return end
-        if srow[x] and srow[x] ~= "air" then notAir = true end
+        if crow[x] and crow[x] ~= "air" then notAir = true end
       end
     end
   end
@@ -299,25 +312,31 @@ local function checkRecipe(grid)
     for n=1, #recipe.input do
       local row = recipe.input[n]
 
-      for cid=1, #row do
+      for cid=1, 3 do
         local block = row[cid]
-        if recipe.defs and recipe.defs[block] then
-          block = recipe.defs[block]
-        end
+        if block then
+          if recipe.defs and recipe.defs[block] then
+            block = recipe.defs[block]
+          end
 
-        if getBlockIDByName(block) then
-          rpat[n][cid] = block
-          rpresent[#rpresent+1] = block
-        else
-          term.setCursorPos(1, 3)
-          term.write(block or "unknown error")
+          if getBlockIDByName(block) then
+            rpat[n][cid] = block
+            rpresent[#rpresent+1] = block
+
+          else
+            term.setCursorPos(1, 3)
+            term.write(block or "unknown error")
+          end
         end
       end
     end
 
     if recipe.shaped then
-      for x=1, 3 do
-        for y=1, 3 do
+      for x=0, 3 - math.max(
+          #(recipe.input[1] or empty),
+          #(recipe.input[2] or empty),
+          #(recipe.input[3] or empty)) do
+        for y=0, 3 - #recipe.input do
           if checkPattern(pattern, rpat, x, y) then
             return out
           end
@@ -328,21 +347,17 @@ local function checkRecipe(grid)
       table.sort(present)
       table.sort(rpresent)
 
-      term.setCursorPos(1, 2)
-      term.write(("%d,%d,%s"):format(#present,#rpresent,recipe.output.name))
-      if #present == 0 or #present ~= #rpresent then return end
-
       local match = true
-      for n=1, #present do
-        term.setCursorPos(1, 4)
-        term.write(("%q,%q"):format(present[n], rpresent[n]))
-        if present[n] ~= rpresent[n] then match = false; break end
+
+      if #present == 0 or #present ~= #rpresent then match = false end
+
+      if match then
+        for n=1, #present do
+          if present[n] ~= rpresent[n] then match = false; break end
+        end
       end
 
       if match then
-        term.setCursorPos(1, 3)
-        term.write(("%s present"):format(recipe.output.name))
-
         return out
       end
     end
@@ -524,6 +539,9 @@ end
 -- playery (number) -- 1 byte; the player's Y coordinate
 -- seed (number) -- 8 bytes; the map seed
 -- nchunk (number) -- 1 byte; the number of chunks stored in the file
+-- x36:
+--    id (number) -- 1 byte; item ID of this slot in the player's inventory
+--    count (number) -- 1 byte; how many of the item is in this slot
 -- heightmap -- 256^2 bytes; the heightmap used in world generation
 -- for each chunk:
 --    x (number) -- 1 byte; signed chunk ID
@@ -561,6 +579,11 @@ local function loadMap(path)
 
   -- map seed
   seed = string.unpack("<I8", handle:read(8))
+
+  for i=1, 36 do
+    local id, count = handle:read(1):byte(), handle:read(1):byte()
+    player.inventory[i] = {id, count}
+  end
 
   local title = "Loading " .. path
 
@@ -612,6 +635,11 @@ local function saveMap(path)
   local handle = assert(io.open(path, "wb"))
   handle:write(HEADER ..
     string.pack("<I1i2I1I8", VERSION, player.x, player.y, seed))
+
+  for i=1, 36 do
+    local slot = player.inventory[i]
+    handle:write(string.char(slot[1]) .. string.char(slot[2]))
+  end
 
   local title = "Saving " .. path
 
@@ -1158,7 +1186,7 @@ end
 ------ Graphics ------
 local function draw(selected)
   win.reposition(1, 1, oldTerm.getSize())
-  --term.redirect(win)
+  if not DEBUG then term.redirect(win) end
 
   win.setVisible(false)
 
@@ -1219,28 +1247,34 @@ local function draw(selected)
       9, 9, selected[2] or 0)
 
     -- crafting grid
-    invPos[3] = drawInventory(
-      math.floor(w/2-2), math.floor(h/2-5), crafting, 4, 2, 0,
-      selected[3] or 0)
-      --player.selectedInventory - 27)
+    if craftingTableOpen then
+      invPos[3] = drawInventory(
+        math.floor(w/2-5), math.floor(h/2-7), craftingTable, 9, 3, 0,
+          selected[3] or 0)
+    else
+      invPos[3] = drawInventory(
+        math.floor(w/2-2), math.floor(h/2-5), crafting, 4, 2, 0,
+        selected[3] or 0)
+    end
 
-    local stack = checkRecipe(crafting)
+    local stack = checkRecipe(craftingTableOpen and craftingTable or crafting)
     if stack then
       crafting[5] = stack
+    else
+      crafting[5] = {0, 0}
     end
 
     -- crafting output
     invPos[4] = drawInventory(
       math.floor(w/2+5), math.floor(h/2-4), crafting, 1, 1, 4,
       selected[4] or 0)
-      --player.selectedInventory - 31)
 
   else
     term.setCursorPos(halfW + player.look.x + 1, halfH - player.look.y)
     term.setCursorBlink(true)
   end
 
-  --win.setVisible(true)
+  if not DEBUG then win.setVisible(true) end
   term.redirect(oldTerm)
 
   return invPos
@@ -1362,16 +1396,34 @@ local function getInventoryOffset(id, slot)
     return player.inventory, 9 + slot
 
   elseif id == 3 then
-    return crafting, slot
+    return craftingTableOpen and craftingTable or crafting, slot
 
   elseif id == 4 then
     return crafting, 5
   end
 end
 
+local function decrementCrafting(ia)
+  -- decrement everything in the crafting grid if needed
+  if ia == 4 then
+    local craft = craftingTableOpen and craftingTable or crafting
+
+    local n = 9
+    if #craft == 5 then n = 4 end
+
+    for i=1, n do
+      local slot = craft[i]
+      if slot then
+        slot[2] = math.max(0, slot[2] - 1)
+        if slot[2] == 0 then slot[1] = 0 end
+      end
+    end
+  end
+end
+
 -- Move item stack from inventoryA (ia) slotA (sa) to
 -- inventoryB (ib) slotB (sb)
-local function moveStackFrom(ia, sa, ib, sb)
+local function moveStackFrom(ia, sa, ib, sb, limit)
   local isrc, soffset = getInventoryOffset(ia, sa)
   local idest, doffset = getInventoryOffset(ib, sb)
 
@@ -1380,14 +1432,12 @@ local function moveStackFrom(ia, sa, ib, sb)
     return
   end
 
-  -- ditto
-  if ia == 4 and idest[doffset][1] > 0 then return end
-
   -- combine slots if possible
+  local s, d = isrc[soffset], idest[doffset]
   if isrc[soffset][1] == idest[doffset][1] then
-    local s, d = isrc[soffset], idest[doffset]
-    local diff = math.min(s[2], 64 - d[2])
+    local diff = math.min(s[2], 64 - d[2], limit or 128)
 
+    decrementCrafting(ia)
     s[2] = s[2] - diff
     d[2] = d[2] + diff
 
@@ -1395,18 +1445,20 @@ local function moveStackFrom(ia, sa, ib, sb)
       s[1] = 0
     end
 
+  elseif limit and s[2] > 1 and d[1] == 0 then
+    decrementCrafting(ia)
+    d[1] = s[1]
+    d[2] = 1
+    s[2] = s[2] - 1
+
   else
+    -- disallow illegal swappage
+    if ia == 4 and idest[doffset][1] > 0 then return end
+
+    decrementCrafting(ia)
+
     -- otherwise swap the slots!
     isrc[soffset], idest[doffset] = idest[doffset], isrc[soffset]
-  end
-
-  -- decrement everything in the crafting grid if needed
-  if ia == 4 then
-    for i=1, 4 do
-      local slot = crafting[i]
-      slot[2] = math.max(0, slot[2] - 1)
-      if slot[2] == 0 then slot[1] = 0 end
-    end
   end
 end
 
@@ -1474,7 +1526,7 @@ local function beginGame(mapName)
       elseif evt[2] == keys.left then
         player.look.x = math.max(-3, player.look.x - 1)
 
-      elseif evt[2] == keys.r then
+      elseif evt[2] == keys.r and not inventoryOpen then
         local bx, by = player.x + player.look.x,
           player.y + player.look.y + 1
         local bid = getBlock(bx, by)
@@ -1508,7 +1560,7 @@ local function beginGame(mapName)
         setBlock(bx, by, "air")
         updateLightMap()
 
-      elseif evt[2] == keys.f then
+      elseif evt[2] == keys.f and not inventoryOpen then
         local bx, by = player.x + player.look.x,
           player.y + player.look.y + 1
 
@@ -1522,9 +1574,15 @@ local function beginGame(mapName)
               slot[1] = 0
             end
           end
-        end
 
-        updateLightMap()
+          updateLightMap()
+
+        elseif getBlock(bx, by) == getBlockIDByName("crafting_table") then
+          inventoryOpen = true
+          craftingTableOpen = true
+          oldHotbar = selected[1]
+          selected[1] = 0
+        end
 
       elseif evt[2] == keys.e then
         inventoryOpen = not inventoryOpen
@@ -1532,6 +1590,7 @@ local function beginGame(mapName)
           oldHotbar = selected[1]
           selected[1] = 0
         else
+          craftingTableOpen = false
           selected[1] = oldHotbar
         end
 
@@ -1554,7 +1613,9 @@ local function beginGame(mapName)
       end
 
     elseif evt[1] == "mouse_click" then
-      local x, y = evt[3], evt[4]
+      local b, x, y = evt[2], evt[3], evt[4]
+      local limit
+      if b ~= 1 then limit = 1 end
 
       if inventoryOpen then
         for i=1, #invPos do
@@ -1564,7 +1625,7 @@ local function beginGame(mapName)
             if x == pos[n][1] and y == pos[n][2] then
               if selected[i] and selected[i] > 0 then
                 if n ~= selected[i] then
-                  moveStackFrom(i, selected[i], i, n)
+                  moveStackFrom(i, selected[i], i, n, limit)
                 end
 
                 selected[i] = 0
@@ -1574,7 +1635,7 @@ local function beginGame(mapName)
 
                 for k=1, #invPos do
                   if k ~= i and selected[k] and selected[k] > 0 then
-                    moveStackFrom(k, selected[k], i, n)
+                    moveStackFrom(k, selected[k], i, n, limit)
                     selected[i] = 0
                     selected[k] = 0
                   end
